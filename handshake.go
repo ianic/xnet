@@ -3,7 +3,12 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/rand"
+	"crypto/sha1"
+	"encoding/base64"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -26,6 +31,16 @@ type Handshake struct {
 	}
 	key  string
 	host string
+}
+
+func (hs *Handshake) Response() string {
+	const crlf = "\r\n"
+	return fmt.Sprintf(
+		"HTTP/1.1 101 Switching Protocols"+crlf+
+			"Upgrade: websocket"+crlf+
+			"Connection: Upgrade"+crlf+
+			"Sec-WebSocket-Accept: %s"+crlf+crlf,
+		secAccept(hs.key))
 }
 
 func Parse(buf []byte) (*Handshake, error) {
@@ -94,4 +109,24 @@ func Parse(buf []byte) (*Handshake, error) {
 	}
 
 	return &hs, nil
+}
+
+// Generate random sec key.
+// Used on client to send Sec-WebSocket-Key header
+func secKey() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(buf), nil
+}
+
+// Generate Sec-WebSocket-Accept key header value on server from clients key.
+func secAccept(key string) string {
+	const WsMagicKey = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+	h := sha1.New()
+	io.WriteString(h, key)
+	io.WriteString(h, WsMagicKey)
+	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
