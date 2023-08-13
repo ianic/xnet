@@ -15,17 +15,17 @@ const (
 
 func main() {
 	address := "localhost:3333"
-	l, err := net.Listen("tcp", address)
+	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		fmt.Println("Error listening:", err.Error())
 		os.Exit(1)
 	}
 	// Close the listener when the application closes.
-	defer l.Close()
+	defer listener.Close()
 	fmt.Println("Listening on ", address)
 	for {
 		// Listen for an incoming connection.
-		conn, err := l.Accept()
+		conn, err := listener.Accept()
 		if err != nil {
 			fmt.Println("Error accepting: ", err.Error())
 			os.Exit(1)

@@ -155,51 +155,12 @@ func (f Frame) isControl() bool {
 		f.opcode == Pong
 }
 
-// func NewFrame(data []byte) (Frame, error) {
-// 	var f Frame
-// 	if len(data) < 2 {
-// 		return f, ErrorInvalidFrame
-// 	}
-// 	opcode := OpCode(data[0] & opcodeMask)
-// 	if err := opcode.Validate(); err != nil {
-// 		return f, err
-// 	}
-// 	f.data = data
-// 	f.opcode = opcode
-// 	return f, nil
-// }
-
-// func HeaderLen(data []byte) int {
-// 	if (len(data)) < 2 {
-// 		return 0
-// 	}
-// 	mask := data[1]&maskMask != 0
-// 	if mask {
-// 		return 1 + payloadLenBytes(data[1]) + 4
-// 	}
-// 	return 1 + payloadLenBytes(data[1])
-//  }
-
-// func maskLenBytes(secondByte byte) (bool, int) {
-// 	mask := secondByte&maskMask != 0
-// 	switch secondByte & opcodeMask {
-// 	case 126:
-// 		return mask, 2
-// 	case 127:
-// 		return mask, 8
-// 	default:
-// 		return mask, 0
-// 	}
-// }
-
-// func flagsOpcode(first byte) (byte, OpCode) {
-// 	return first & ^opcodeMask,
-// 		OpCode(first & opcodeMask)
-// }
-
 // NewFrameFromReader uses buffered reader to decode frame. Blocks if there is
-// not enough data in reader. If there is no more data in reader and frame is
-// not completed returns EOF or ErrUnexpectedEOF (if in ReadAll).
+// not enough data in reader.
+// Returns io.EOF when there is no frame in rdr. When last frame finishes on reader buffer boundary.
+// Returns io.ErrUnexpectedEOF if frame parsing starts but then gets out of bytes.
+//
+// Note: ReadByte returns io.EOF when buffer emtpy, ReadFull returns ErrUnexpectedEOF!
 func NewFrameFromReader(rdr *bufio.Reader) (*Frame, error) {
 	first, err := rdr.ReadByte()
 	if err != nil {
@@ -207,6 +168,9 @@ func NewFrameFromReader(rdr *bufio.Reader) (*Frame, error) {
 	}
 	second, err := rdr.ReadByte()
 	if err != nil {
+		if err == io.EOF {
+			return nil, io.ErrUnexpectedEOF
+		}
 		return nil, err
 	}
 
@@ -270,4 +234,21 @@ func maskUnmask(mask []byte, buf []byte) {
 	for i, c := range buf {
 		buf[i] = c ^ mask[i%4]
 	}
+}
+
+type Iterator struct {
+	rdr *bufio.Reader
+	err error
+}
+
+func (i *Iterator) Next() *Frame {
+	frame, err := NewFrameFromReader(i.rdr)
+	if err != io.EOF {
+		i.err = err
+	}
+	return frame
+}
+
+func NewIterator(rdr *bufio.Reader) *Iterator {
+	return &Iterator{rdr: rdr, err: nil}
 }
