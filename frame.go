@@ -32,6 +32,8 @@ var (
 	ErrInvalidCloseCode             = errors.New("invalid close code")
 	ErrFragmentedControlFrame       = errors.New("fragmented control frame")
 	ErrInvalidUtf8Payload           = errors.New("invalid utf8 payload")
+	ErrReservedRsv                  = errors.New("reserved rsv bit is set")
+	ErrDeflateNotSupported          = errors.New("rsv1 set but deflate is not supported")
 )
 
 func (o OpCode) verify() error {
@@ -95,6 +97,9 @@ func (f Frame) closePayload() []byte {
 }
 
 func (f Frame) verify() error {
+	if f.Rsv2() || f.Rsv3() {
+		return ErrReservedRsv
+	}
 	if err := f.opcode.verify(); err != nil {
 		return err
 	}
@@ -145,6 +150,16 @@ func (f Frame) verifyControl() error {
 	}
 	if !f.Fin() {
 		return ErrFragmentedControlFrame
+	}
+	return nil
+}
+
+func (f Frame) verifyRsvBits(deflateSupported bool) error {
+	if f.Rsv1() && !deflateSupported {
+		return ErrDeflateNotSupported
+	}
+	if f.Rsv2() || f.Rsv3() {
+		return ErrReservedRsv
 	}
 	return nil
 }
