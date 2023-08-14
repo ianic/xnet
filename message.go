@@ -28,8 +28,10 @@ type Message struct {
 }
 
 func (m *Message) append(frame Frame) {
-	if len(m.Payload) == 0 {
+	if m.Encoding == 0 {
 		m.Encoding = MessageEncoding(frame.opcode)
+	}
+	if len(m.Payload) == 0 {
 		m.Payload = frame.payload
 		return
 	}
@@ -67,6 +69,10 @@ func (c *Connection) Read() (Message, error) {
 		}
 
 		if err := frame.verifyContinuation(fragment); err != nil {
+			return Message{}, err
+		}
+		// TODO set real deflate flag
+		if err := frame.verifyRsvBits(false); err != nil {
 			return Message{}, err
 		}
 		fragment = frame.fragment()

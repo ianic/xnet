@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -11,7 +12,7 @@ import (
 )
 
 func main() {
-	address := "localhost:3333"
+	address := "localhost:9001"
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		fmt.Println("Error listening:", err.Error())
@@ -29,7 +30,6 @@ func main() {
 	}
 }
 
-// Handles incoming requests.
 func handleRequest(conn net.Conn) {
 	defer conn.Close()
 
@@ -42,10 +42,12 @@ func handleRequest(conn net.Conn) {
 	for {
 		msg, err := ws.Read()
 		if err != nil {
-			log.Printf("connection closed %s", err)
+			if err != io.EOF {
+				log.Printf("connection closed %s", err)
+			}
 			return
 		}
-		fmt.Printf("%s", string(msg.Payload))
+		// fmt.Printf("%s", string(msg.Payload))
 		if err := msg.SendTo(conn); err != nil {
 			log.Printf("msg send error %s", err)
 			return
