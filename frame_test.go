@@ -13,6 +13,7 @@ var (
 	maskedHelloFrame = []byte{0x81, 0x85, 0x37, 0xfa, 0x21, 0x3d, 0x7f, 0x9f, 0x4d, 0x51, 0x58}
 	pingFrame        = []byte{0x89, 0x00}
 	pongFrame        = []byte{0x8a, 0x00}
+	closeFrame       = []byte{0x88, 0x02, 0x03, 0xe9} // default close frame, status 1001
 
 	fragment1 = []byte{0x01, 0x1, 0x48}             // first text frame
 	fragment2 = []byte{0x00, 0x3, 0x65, 0x6c, 0x6c} // continuation frame
@@ -58,6 +59,10 @@ func TestNewFrameOpcode(t *testing.T) {
 	f, err = NewFrameFromBuffer(pongFrame)
 	assert.NoError(t, err)
 	assert.Equal(t, Pong, f.opcode)
+
+	f, err = NewFrameFromBuffer(closeFrame)
+	assert.NoError(t, err)
+	assert.Equal(t, Close, f.opcode)
 }
 
 func TestParseFragmentedMessage(t *testing.T) {
@@ -98,4 +103,11 @@ func TestParseFragmentedMessage(t *testing.T) {
 	_, err = rdr.Read()
 	assert.Error(t, err)
 
+}
+
+func TestCloseFrame(t *testing.T) {
+	f, err := NewFrameFromBuffer(closeFrame)
+	assert.NoError(t, err)
+	assert.Equal(t, Close, f.opcode)
+	assert.Equal(t, uint16(1001), f.closeCode())
 }

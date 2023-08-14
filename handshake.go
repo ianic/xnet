@@ -33,8 +33,13 @@ type Handshake struct {
 	host string
 }
 
+const (
+	crlf       = "\r\n"
+	requestEnd = crlf + crlf
+)
+
 func (hs *Handshake) Response() string {
-	const crlf = "\r\n"
+
 	return fmt.Sprintf(
 		"HTTP/1.1 101 Switching Protocols"+crlf+
 			"Upgrade: websocket"+crlf+

@@ -1,16 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"time"
-)
-
-const (
-	CONN_HOST = "localhost"
-	CONN_PORT = "3333"
-	CONN_TYPE = "tcp"
 )
 
 func main() {
@@ -20,17 +17,14 @@ func main() {
 		fmt.Println("Error listening:", err.Error())
 		os.Exit(1)
 	}
-	// Close the listener when the application closes.
 	defer listener.Close()
 	fmt.Println("Listening on ", address)
 	for {
-		// Listen for an incoming connection.
 		conn, err := listener.Accept()
 		if err != nil {
 			fmt.Println("Error accepting: ", err.Error())
 			os.Exit(1)
 		}
-		// Handle connections in a new goroutine.
 		go handleRequest(conn)
 	}
 }
@@ -39,18 +33,55 @@ func main() {
 func handleRequest(conn net.Conn) {
 	defer conn.Close()
 
-	deadline := time.Now().Add(time.Second * 1)
-	conn.SetReadDeadline(deadline)
-	// Make a buffer to hold incoming data.
-	buf := make([]byte, 1024)
-	// Read the incoming connection into the buffer.
-	reqLen, err := conn.Read(buf)
+	ws, err := handshake(conn)
 	if err != nil {
-		fmt.Println("Error reading:", err.Error())
+		log.Printf("handshake failed %s", err)
 		return
 	}
-	fmt.Printf("Received: %s\n", buf[0:reqLen])
-	// Send a response back to person contacting us.
-	conn.Write([]byte("Message received."))
-	// Close the connection when you're done with it.
+
+	for {
+		msg, err := ws.Read()
+		if err != nil {
+			log.Printf("connection closed %s", err)
+			return
+		}
+		fmt.Printf("%s", string(msg.Payload))
+		if err := msg.SendTo(conn); err != nil {
+			log.Printf("msg send error %s", err)
+			return
+		}
+	}
+}
+
+func handshake(conn net.Conn) (*Connection, error) {
+	deadline := time.Now().Add(time.Second * 15)
+	conn.SetReadDeadline(deadline)
+
+	pos := 0
+	buf := make([]byte, 4096)
+	for {
+		n, err := conn.Read(buf[pos:])
+		if err != nil {
+			return nil, err
+		}
+		pos += n
+		if bytes.HasSuffix(buf[:pos], []byte(requestEnd)) {
+			hs, err := Parse(buf[:pos])
+			if err != nil {
+				return nil, err
+			}
+			_, err = conn.Write([]byte(hs.Response()))
+			if err != nil {
+				return nil, err
+			}
+
+			conn.SetReadDeadline(time.Time{})
+			ws := NewConnection(conn)
+			return &ws, nil
+		}
+		pos += n
+		if pos == len(buf) {
+			return nil, errors.New("request header not found")
+		}
+	}
 }

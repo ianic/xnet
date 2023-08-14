@@ -27,6 +27,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"net"
 	"unicode/utf8"
 )
 
@@ -38,6 +39,7 @@ var (
 	ErrInvalidUtf8Payload           = errors.New("invalid utf8 payload")
 	ErrReservedRsv                  = errors.New("reserved rsv bit is set")
 	ErrDeflateNotSupported          = errors.New("rsv1 set but deflate is not supported")
+	ErrInvalidFragmentation         = errors.New("invalid frames fragmentation")
 )
 
 type OpCode byte
@@ -50,6 +52,25 @@ const (
 	Ping         OpCode = 9
 	Pong         OpCode = 0xa
 )
+
+type Fragment byte
+
+const (
+	fragmentUnfragmented Fragment = iota
+	fragmentStart
+	fragmentMiddle
+	fragmentEnd
+)
+
+func (curr Fragment) isValidContinuation(prev Fragment) bool {
+	switch prev {
+	case fragmentUnfragmented, fragmentEnd:
+		return curr == fragmentUnfragmented || curr == fragmentStart
+	case fragmentStart, fragmentMiddle:
+		return curr == fragmentMiddle || curr == fragmentEnd
+	}
+	panic("unreachable")
+}
 
 func (o OpCode) verify() error {
 	if o <= Binary || (o >= Close && o <= Pong) {
@@ -90,6 +111,30 @@ func (f Frame) Rsv2() bool {
 
 func (f Frame) Rsv3() bool {
 	return f.flags&rsv3Mask != 0
+}
+
+func (f Frame) fragment() Fragment {
+	if f.Fin() {
+		if f.opcode == Continuation {
+			return fragmentEnd
+		}
+		return fragmentUnfragmented
+	}
+	if f.opcode == Continuation {
+		return fragmentMiddle
+	}
+	// not fin and opcode binary or text
+	return fragmentStart
+}
+
+func (f Frame) verifyContinuation(prev Fragment) error {
+	if f.isControl() {
+		return nil
+	}
+	if !f.fragment().isValidContinuation(prev) {
+		return ErrInvalidFragmentation
+	}
+	return nil
 }
 
 func (f Frame) closeCode() uint16 {
@@ -186,18 +231,24 @@ func (f Frame) isControl() bool {
 		f.opcode == Pong
 }
 
-// newFrame uses buffered reader to decode frame. Blocks if there is
-// not enough data in reader.
-// Returns io.EOF when there is no frame in rdr. When last frame finishes on reader buffer boundary.
-// Returns io.ErrUnexpectedEOF if frame parsing starts but then gets out of bytes.
+// newFrame uses buffered reader to decode frame.
+//
+// Blocks if there is not enough data in reader. Returns io.EOF when there is no
+// frame in rdr. When last frame finishes on reader buffer boundary. Returns
+// io.ErrUnexpectedEOF if frame parsing starts but then gets out of bytes.
+//
+// Returns:
+//   - io.EOF - when no more frames in the stream, clean exit
+//   - io.ErrUnexpectedEOF - when EOF happens in the middle of frame parsing, unclean exit
+//   - (any other underlaying reader error)
 //
 // Note: ReadByte returns io.EOF when buffer emtpy, ReadFull returns ErrUnexpectedEOF!
-func newFrame(rdr *bufio.Reader) (Frame, error) {
-	first, err := rdr.ReadByte()
+func newFrame(rd *bufio.Reader) (Frame, error) {
+	first, err := rd.ReadByte()
 	if err != nil {
 		return Frame{}, err
 	}
-	second, err := rdr.ReadByte()
+	second, err := rd.ReadByte()
 	if err != nil {
 		if err == io.EOF {
 			return Frame{}, io.ErrUnexpectedEOF
@@ -215,13 +266,13 @@ func newFrame(rdr *bufio.Reader) (Frame, error) {
 	switch payloadLen {
 	case 126:
 		buf := make([]byte, 2)
-		if _, err := io.ReadFull(rdr, buf); err != nil {
+		if _, err := io.ReadFull(rd, buf); err != nil {
 			return Frame{}, err
 		}
 		payloadLen = uint64(binary.BigEndian.Uint16(buf))
 	case 127:
 		buf := make([]byte, 8)
-		if _, err := io.ReadFull(rdr, buf); err != nil {
+		if _, err := io.ReadFull(rd, buf); err != nil {
 			return Frame{}, err
 		}
 		payloadLen = binary.BigEndian.Uint64(buf)
@@ -231,7 +282,7 @@ func newFrame(rdr *bufio.Reader) (Frame, error) {
 	var mask []byte
 	if masked {
 		mask = make([]byte, 4)
-		if _, err := io.ReadFull(rdr, mask); err != nil {
+		if _, err := io.ReadFull(rd, mask); err != nil {
 			return Frame{}, err
 		}
 	}
@@ -240,7 +291,7 @@ func newFrame(rdr *bufio.Reader) (Frame, error) {
 	var payload []byte
 	if payloadLen > 0 {
 		payload = make([]byte, payloadLen)
-		if _, err := io.ReadFull(rdr, payload); err != nil {
+		if _, err := io.ReadFull(rd, payload); err != nil {
 			return Frame{}, err
 		}
 
@@ -279,4 +330,41 @@ func (r FrameReader) Read() (Frame, error) {
 
 func NewFrameReader(rd io.Reader) FrameReader {
 	return FrameReader{rd: bufio.NewReader(rd)}
+}
+
+// TODO masked version
+func (f Frame) Header() []byte {
+	pbl := f.payloadLenBytes()
+	header := make([]byte, 2+pbl)
+
+	header[0] = finMask | byte(f.opcode)
+
+	switch pbl {
+	case 0:
+		header[1] = byte(len(f.payload))
+	case 2:
+		header[1] = byte(126)
+		binary.BigEndian.PutUint16(header[2:4], uint16(len(f.payload)))
+	case 8:
+		header[1] = byte(127)
+		binary.BigEndian.PutUint64(header[2:10], uint64(len(f.payload)))
+	}
+	return header
+}
+
+func (f Frame) payloadLenBytes() int {
+	len := len(f.payload)
+	if len < 126 {
+		return 0
+	}
+	if len < 65536 {
+		return 2
+	}
+	return 8
+}
+
+func (f Frame) SendTo(w io.Writer) error {
+	var buffers = net.Buffers([][]byte{f.Header(), f.payload})
+	_, err := buffers.WriteTo(w)
+	return err
 }
