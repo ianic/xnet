@@ -1,3 +1,24 @@
+// WebSocket Protocol Frame
+// reference: https://www.rfc-editor.org/rfc/rfc6455#section-5
+//
+//	 0                   1                   2                   3
+//	 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//	+-+-+-+-+-------+-+-------------+-------------------------------+
+//	|F|R|R|R| opcode|M| Payload len |    Extended payload length    |
+//	|I|S|S|S|  (4)  |A|     (7)     |             (16/64)           |
+//	|N|V|V|V|       |S|             |   (if payload len==126/127)   |
+//	| |1|2|3|       |K|             |                               |
+//	+-+-+-+-+-------+-+-------------+ - - - - - - - - - - - - - - - +
+//	|     Extended payload length continued, if payload len == 127  |
+//	+ - - - - - - - - - - - - - - - +-------------------------------+
+//	|                               |Masking-key, if MASK set to 1  |
+//	+-------------------------------+-------------------------------+
+//	| Masking-key (continued)       |          Payload Data         |
+//	+-------------------------------- - - - - - - - - - - - - - - - +
+//	:                     Payload Data continued ...                :
+//	+ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - +
+//	|                     Payload Data continued ...                |
+//	+---------------------------------------------------------------+
 package main
 
 import (
@@ -7,6 +28,16 @@ import (
 	"errors"
 	"io"
 	"unicode/utf8"
+)
+
+var (
+	ErrorReservedOpcode             = errors.New("reserved opcode")
+	ErrTooBigPayloadForControlFrame = errors.New("too big payload for control frame")
+	ErrInvalidCloseCode             = errors.New("invalid close code")
+	ErrFragmentedControlFrame       = errors.New("fragmented control frame")
+	ErrInvalidUtf8Payload           = errors.New("invalid utf8 payload")
+	ErrReservedRsv                  = errors.New("reserved rsv bit is set")
+	ErrDeflateNotSupported          = errors.New("rsv1 set but deflate is not supported")
 )
 
 type OpCode byte
@@ -20,28 +51,11 @@ const (
 	Pong         OpCode = 0xa
 )
 
-const (
-	defaultCloseCode = 1000
-)
-
-var (
-	ErrorReservedOpcode = errors.New("reserved opcode")
-	ErrorInvalidFrame   = errors.New("invalid frame")
-
-	ErrTooBigPayloadForControlFrame = errors.New("too big payload for control frame")
-	ErrInvalidCloseCode             = errors.New("invalid close code")
-	ErrFragmentedControlFrame       = errors.New("fragmented control frame")
-	ErrInvalidUtf8Payload           = errors.New("invalid utf8 payload")
-	ErrReservedRsv                  = errors.New("reserved rsv bit is set")
-	ErrDeflateNotSupported          = errors.New("rsv1 set but deflate is not supported")
-)
-
 func (o OpCode) verify() error {
 	if o <= Binary || (o >= Close && o <= Pong) {
 		return nil
 	}
 	return ErrorReservedOpcode
-
 }
 
 const (
@@ -52,12 +66,14 @@ const (
 	opcodeMask byte = 0b0000_1111
 	maskMask   byte = 0b1000_0000
 	lenMask    byte = 0b0111_1111
+
+	defaultCloseCode = 1000
 )
 
 type Frame struct {
+	payload []byte
 	flags   byte
 	opcode  OpCode
-	payload []byte
 }
 
 func (f Frame) Fin() bool {
@@ -170,23 +186,23 @@ func (f Frame) isControl() bool {
 		f.opcode == Pong
 }
 
-// NewFrameFromReader uses buffered reader to decode frame. Blocks if there is
+// newFrame uses buffered reader to decode frame. Blocks if there is
 // not enough data in reader.
 // Returns io.EOF when there is no frame in rdr. When last frame finishes on reader buffer boundary.
 // Returns io.ErrUnexpectedEOF if frame parsing starts but then gets out of bytes.
 //
 // Note: ReadByte returns io.EOF when buffer emtpy, ReadFull returns ErrUnexpectedEOF!
-func NewFrameFromReader(rdr *bufio.Reader) (*Frame, error) {
+func newFrame(rdr *bufio.Reader) (Frame, error) {
 	first, err := rdr.ReadByte()
 	if err != nil {
-		return nil, err
+		return Frame{}, err
 	}
 	second, err := rdr.ReadByte()
 	if err != nil {
 		if err == io.EOF {
-			return nil, io.ErrUnexpectedEOF
+			return Frame{}, io.ErrUnexpectedEOF
 		}
-		return nil, err
+		return Frame{}, err
 	}
 
 	// decode first two bytes
@@ -200,49 +216,51 @@ func NewFrameFromReader(rdr *bufio.Reader) (*Frame, error) {
 	case 126:
 		buf := make([]byte, 2)
 		if _, err := io.ReadFull(rdr, buf); err != nil {
-			return nil, err
+			return Frame{}, err
 		}
 		payloadLen = uint64(binary.BigEndian.Uint16(buf))
 	case 127:
 		buf := make([]byte, 8)
 		if _, err := io.ReadFull(rdr, buf); err != nil {
-			return nil, err
+			return Frame{}, err
 		}
 		payloadLen = binary.BigEndian.Uint64(buf)
 	}
 
-	frame := Frame{flags: flags, opcode: opcode}
-
+	// read masking key if present
 	var mask []byte
 	if masked {
 		mask = make([]byte, 4)
 		if _, err := io.ReadFull(rdr, mask); err != nil {
-			return nil, err
+			return Frame{}, err
 		}
 	}
 
 	// read payload
+	var payload []byte
 	if payloadLen > 0 {
-		frame.payload = make([]byte, payloadLen)
-		if _, err := io.ReadFull(rdr, frame.payload); err != nil {
-			return nil, err
+		payload = make([]byte, payloadLen)
+		if _, err := io.ReadFull(rdr, payload); err != nil {
+			return Frame{}, err
 		}
 
 		if masked {
-			maskUnmask(mask, frame.payload)
+			maskUnmask(mask, payload)
 		}
 	}
 
+	// create and verify frame
+	frame := Frame{flags: flags, opcode: opcode, payload: payload}
 	if err := frame.verify(); err != nil {
-		return nil, err
+		return Frame{}, err
 	}
 
-	return &frame, nil
+	return frame, nil
 }
 
-func NewFrame(buf []byte) (*Frame, error) {
+func NewFrameFromBuffer(buf []byte) (Frame, error) {
 	rdr := bufio.NewReader(bytes.NewReader(buf))
-	return NewFrameFromReader(rdr)
+	return newFrame(rdr)
 }
 
 func maskUnmask(mask []byte, buf []byte) {
@@ -251,19 +269,14 @@ func maskUnmask(mask []byte, buf []byte) {
 	}
 }
 
-type Iterator struct {
-	rdr *bufio.Reader
-	err error
+type FrameReader struct {
+	rd *bufio.Reader
 }
 
-func (i *Iterator) Next() *Frame {
-	frame, err := NewFrameFromReader(i.rdr)
-	if err != io.EOF {
-		i.err = err
-	}
-	return frame
+func (r FrameReader) Read() (Frame, error) {
+	return newFrame(r.rd)
 }
 
-func NewIterator(rdr *bufio.Reader) *Iterator {
-	return &Iterator{rdr: rdr, err: nil}
+func NewFrameReader(rd io.Reader) FrameReader {
+	return FrameReader{rd: bufio.NewReader(rd)}
 }

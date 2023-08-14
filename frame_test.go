@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"testing"
 
@@ -28,7 +27,7 @@ var (
 )
 
 func TestNewFrame(t *testing.T) {
-	f, err := NewFrame(helloFrame)
+	f, err := NewFrameFromBuffer(helloFrame)
 	assert.NoError(t, err)
 	assert.True(t, f.Fin())
 	assert.False(t, f.Rsv1())
@@ -37,7 +36,7 @@ func TestNewFrame(t *testing.T) {
 	assert.Equal(t, Text, f.opcode)
 	assert.Equal(t, []byte("Hello"), f.payload)
 
-	f, err = NewFrame(maskedHelloFrame)
+	f, err = NewFrameFromBuffer(maskedHelloFrame)
 	require.NoError(t, err)
 	assert.True(t, f.Fin())
 	assert.False(t, f.Rsv1())
@@ -48,51 +47,55 @@ func TestNewFrame(t *testing.T) {
 }
 
 func TestNewFrameOpcode(t *testing.T) {
-	f, err := NewFrame(helloFrame)
+	f, err := NewFrameFromBuffer(helloFrame)
 	assert.NoError(t, err)
 	assert.Equal(t, Text, f.opcode)
 
-	f, err = NewFrame(pingFrame)
+	f, err = NewFrameFromBuffer(pingFrame)
 	assert.NoError(t, err)
 	assert.Equal(t, Ping, f.opcode)
 
-	f, err = NewFrame(pongFrame)
+	f, err = NewFrameFromBuffer(pongFrame)
 	assert.NoError(t, err)
 	assert.Equal(t, Pong, f.opcode)
 }
 
 func TestParseFragmentedMessage(t *testing.T) {
-	rdr := bufio.NewReader(bytes.NewReader(fragmentedMessage))
-	iter := NewIterator(rdr)
+	rdr := NewFrameReader(bytes.NewReader(fragmentedMessage))
 
-	f1 := iter.Next()
+	f1, err := rdr.Read()
+	assert.NoError(t, err)
 	require.NotNil(t, f1)
 	assert.Equal(t, f1.opcode, Text)
 	assert.False(t, f1.Fin())
 
-	fp := iter.Next()
+	fp, err := rdr.Read()
+	assert.NoError(t, err)
 	require.NotNil(t, fp)
 	assert.Equal(t, fp.opcode, Ping)
 	assert.True(t, fp.Fin())
 
-	f2 := iter.Next()
+	f2, err := rdr.Read()
+	assert.NoError(t, err)
 	require.NotNil(t, f2)
 	assert.Equal(t, f2.opcode, Continuation)
 	assert.False(t, f1.Fin())
 
-	fo := iter.Next()
+	fo, err := rdr.Read()
+	assert.NoError(t, err)
 	require.NotNil(t, fo)
 	assert.Equal(t, fo.opcode, Pong)
 	assert.True(t, fo.Fin())
 
-	f3 := iter.Next()
+	f3, err := rdr.Read()
+	assert.NoError(t, err)
 	require.NotNil(t, f3)
 	assert.Equal(t, f3.opcode, Continuation)
 	assert.True(t, f3.Fin())
 
 	assert.Equal(t, "Hello!", string(f1.payload)+string(f2.payload)+string(f3.payload))
 
-	require.Nil(t, iter.Next())
-	require.Nil(t, iter.Next())
-	require.Nil(t, iter.err)
+	_, err = rdr.Read()
+	assert.Error(t, err)
+
 }
