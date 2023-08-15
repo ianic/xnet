@@ -1,0 +1,23 @@
+{
+    "url": "ws://127.0.0.1:9001",
+    "outdir": "./reports/clients",
+    "cases": [
+        "*"
+    ],
+    "exclude-cases": [
+        "6.4.*",
+        "9.*",
+        "12.*",
+        "13.*"
+    ],
+    "exclude-agent-cases": {},
+    "servers": [
+        {
+            "agent": "Go echo server",
+            "url": "ws://host.docker.internal:9001",
+            "options": {
+                "version": 18
+            }
+        }
+    ]
+}

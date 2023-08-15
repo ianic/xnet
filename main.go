@@ -13,18 +13,23 @@ import (
 
 func main() {
 	address := "localhost:9001"
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		fmt.Println("Error listening:", err.Error())
+	if err := runEchoServer(address); err != nil {
+		fmt.Println("error:", err.Error())
 		os.Exit(1)
 	}
+}
+
+func runEchoServer(address string) error {
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return err
+	}
 	defer listener.Close()
-	fmt.Println("Listening on ", address)
+	// fmt.Println("Listening on ", address)
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			fmt.Println("Error accepting: ", err.Error())
-			os.Exit(1)
+			return err
 		}
 		go handleRequest(conn)
 	}
@@ -32,7 +37,6 @@ func main() {
 
 func handleRequest(conn net.Conn) {
 	defer conn.Close()
-
 	ws, err := handshake(conn)
 	if err != nil {
 		log.Printf("handshake failed %s", err)
