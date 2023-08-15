@@ -7,7 +7,7 @@ import (
 )
 
 func TestParse(t *testing.T) {
-	hs, err := Parse([]byte(http_request))
+	hs, err := NewHandshake([]byte(http_request))
 	assert.NoError(t, err)
 
 	assert.Equal(t, "13", hs.version)
@@ -15,10 +15,8 @@ func TestParse(t *testing.T) {
 	assert.Equal(t, "ws.example.com", hs.host)
 
 	assert.True(t, hs.extension.permessageDeflate)
-	assert.True(t, hs.extension.serverMaxWindowBits.included)
-	assert.True(t, hs.extension.clientMaxWindowBits.included)
-	assert.Equal(t, 12, hs.extension.serverMaxWindowBits.value)
-	assert.Equal(t, 13, hs.extension.clientMaxWindowBits.value)
+	assert.Equal(t, 12, hs.extension.serverMaxWindowBits)
+	assert.Equal(t, 13, hs.extension.clientMaxWindowBits)
 
 	const expected = "HTTP/1.1 101 Switching Protocols\r\n" +
 		"Upgrade: websocket\r\n" +

@@ -165,9 +165,6 @@ func (f Frame) verify() error {
 		return err
 	}
 	if !f.isControl() {
-		if f.opcode == Text {
-			return f.verifyText()
-		}
 		return nil
 	}
 	if err := f.verifyControl(); err != nil {
@@ -367,4 +364,8 @@ func (f Frame) SendTo(w io.Writer) error {
 	var buffers = net.Buffers([][]byte{f.Header(), f.payload})
 	_, err := buffers.WriteTo(w)
 	return err
+}
+
+func (f Frame) Buffers() net.Buffers {
+	return net.Buffers([][]byte{f.Header(), f.payload})
 }

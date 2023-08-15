@@ -48,7 +48,7 @@ func handleRequest(conn net.Conn) {
 			return
 		}
 		// fmt.Printf("%s", string(msg.Payload))
-		if err := msg.SendTo(conn); err != nil {
+		if err := ws.Write(msg); err != nil {
 			log.Printf("msg send error %s", err)
 			return
 		}
@@ -68,7 +68,7 @@ func handshake(conn net.Conn) (*Connection, error) {
 		}
 		pos += n
 		if bytes.HasSuffix(buf[:pos], []byte(requestEnd)) {
-			hs, err := Parse(buf[:pos])
+			hs, err := NewHandshake(buf[:pos])
 			if err != nil {
 				return nil, err
 			}
@@ -78,7 +78,7 @@ func handshake(conn net.Conn) (*Connection, error) {
 			}
 
 			conn.SetReadDeadline(time.Time{})
-			ws := NewConnection(conn)
+			ws := NewConnection(conn, hs.extension)
 			return &ws, nil
 		}
 		pos += n

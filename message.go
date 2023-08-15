@@ -1,18 +1,35 @@
 package main
 
 import (
+	"bytes"
+	"compress/flate"
 	"io"
+	"net"
 	"unicode/utf8"
 )
 
 // WebSocket connection
 type Connection struct {
-	conn io.ReadWriteCloser // underlaying network connection
-	rd   FrameReader
+	conn      io.ReadWriter // underlaying network connection
+	rd        FrameReader
+	extension Extension
+	//decompressorReader *bytes.Reader
+	decompressor io.ReadCloser
+	compressor   *flate.Writer
 }
 
-func NewConnection(conn io.ReadWriteCloser) Connection {
-	return Connection{conn: conn, rd: NewFrameReader(conn)}
+func NewConnection(conn io.ReadWriter, extension Extension) Connection {
+	ws := Connection{
+		conn:      conn,
+		rd:        NewFrameReader(conn),
+		extension: extension,
+	}
+	if extension.permessageDeflate {
+		//ws.decompressorReader = bytes.NewReader(nil)
+		ws.decompressor = flate.NewReader(nil)
+		ws.compressor, _ = flate.NewWriter(nil, 7)
+	}
+	return ws
 }
 
 type MessageEncoding byte
@@ -50,9 +67,15 @@ func (msg Message) SendTo(w io.Writer) error {
 	return frame.SendTo(w)
 }
 
+func (msg Message) Buffers() net.Buffers {
+	frame := Frame{opcode: OpCode(msg.Encoding), payload: msg.Payload}
+	return frame.Buffers()
+}
+
 func (c *Connection) Read() (Message, error) {
 	var msg Message
 	fragment := fragmentUnfragmented
+	compressed := false
 	for {
 		frame, err := c.rd.Read()
 		if err != nil {
@@ -72,24 +95,56 @@ func (c *Connection) Read() (Message, error) {
 			return Message{}, err
 		}
 		// TODO set real deflate flag
-		if err := frame.verifyRsvBits(false); err != nil {
+		if err := frame.verifyRsvBits(c.extension.permessageDeflate); err != nil {
 			return Message{}, err
 		}
 		fragment = frame.fragment()
+		if fragment == fragmentStart || fragment == fragmentUnfragmented {
+			compressed = frame.Rsv1()
+		}
 
 		msg.append(frame)
 		if frame.Fin() {
-			if fragment == fragmentEnd {
-				// Verify only if message if compposed of multiple frames. Frame
-				// is already verified. So if message is from single frame
-				// everyting is already verified.
-				if err := msg.verify(); err != nil {
+			if compressed {
+				msg.Payload, err = c.decompress(msg.Payload)
+				if err != nil {
 					return Message{}, err
 				}
 			}
+			if err := msg.verify(); err != nil {
+				return Message{}, err
+			}
+
 			return msg, nil
 		}
 	}
+}
+
+func (c *Connection) decompress(payload []byte) ([]byte, error) {
+	rd := bytes.NewReader(append(payload, compressLastBlock...))
+	c.decompressor.(flate.Resetter).Reset(rd, nil)
+	// data := append(payload, compressLastBlock...)
+	// c.decompressorReader.Reset(data)
+	// if c.extension.clientNoContextTakeover {
+	// 	c.decompressor.(flate.Resetter).Reset(c.decompressorReader, nil)
+	// }
+	return io.ReadAll(c.decompressor)
+}
+
+func (c *Connection) compress(payload []byte) ([]byte, error) {
+	buf := &bytes.Buffer{}
+	cp := c.compressor
+	cp.Reset(buf)
+
+	if _, err := cp.Write(payload); err != nil {
+		return nil, err
+	}
+	if err := cp.Flush(); err != nil {
+		return nil, err
+	}
+
+	b := buf.Bytes()
+	return b[:len(b)-4], nil
 }
 
 func (c *Connection) handleControl(frame Frame) error {
@@ -105,4 +160,49 @@ func (c *Connection) handleControl(frame Frame) error {
 	default:
 		panic("not a control frame")
 	}
+}
+
+func (c *Connection) Write(msg Message) error {
+	payload := msg.Payload
+	if c.extension.permessageDeflate {
+		var err error
+		payload, err = c.compress(payload)
+		if err != nil {
+			return err
+		}
+	}
+	frame := Frame{opcode: OpCode(msg.Encoding), payload: payload}
+	buffers := frame.Buffers()
+	// TODO ugly
+	if c.extension.permessageDeflate {
+		buffers[0][0] |= rsv1Mask // set rsv1 bit
+	}
+	_, err := buffers.WriteTo(c.conn)
+	return err
+}
+
+var compressLastBlock = []byte{0x00, 0x00, 0xff, 0xff, 0x01, 0x00, 0x00, 0xff, 0xff}
+
+func decompress(data []byte) ([]byte, error) {
+	d := flate.NewReader(bytes.NewReader(append(data, compressLastBlock...)))
+	return io.ReadAll(d)
+}
+
+func compress(data []byte) ([]byte, error) {
+	buf := &bytes.Buffer{}
+	//cp, err := flate.NewWriter(buf, flate.BestCompression)
+	//cp, err := flate.NewWriterWindow(buf, 1<<15)
+	cp, err := flate.NewWriter(buf, 7)
+	if err != nil {
+		return nil, err
+	}
+	_, err = cp.Write(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := cp.Flush(); err != nil {
+		return nil, err
+	}
+	b := buf.Bytes()
+	return b[:len(b)-4], nil
 }
