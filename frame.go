@@ -176,16 +176,6 @@ func (f Frame) verify() error {
 	return nil
 }
 
-// Verify single frame (no fragmentation) utf8 text. If fragmented we need
-// to concatenate payload from all fragments can't do that from single
-// frame.
-func (f Frame) verifyText() error {
-	if f.Fin() && !utf8.Valid(f.payload) {
-		return ErrInvalidUtf8Payload
-	}
-	return nil
-}
-
 func (f Frame) verifyClose() error {
 	if !utf8.Valid(f.closePayload()) {
 		return ErrInvalidUtf8Payload

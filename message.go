@@ -62,11 +62,6 @@ func (m *Message) verify() error {
 	return nil
 }
 
-func (msg Message) SendTo(w io.Writer) error {
-	frame := Frame{opcode: OpCode(msg.Encoding), payload: msg.Payload}
-	return frame.SendTo(w)
-}
-
 func (msg Message) Buffers() net.Buffers {
 	frame := Frame{opcode: OpCode(msg.Encoding), payload: msg.Payload}
 	return frame.Buffers()
@@ -121,30 +116,15 @@ func (c *Connection) Read() (Message, error) {
 }
 
 func (c *Connection) decompress(payload []byte) ([]byte, error) {
-	rd := bytes.NewReader(append(payload, compressLastBlock...))
-	c.decompressor.(flate.Resetter).Reset(rd, nil)
-	// data := append(payload, compressLastBlock...)
-	// c.decompressorReader.Reset(data)
-	// if c.extension.clientNoContextTakeover {
-	// 	c.decompressor.(flate.Resetter).Reset(c.decompressorReader, nil)
-	// }
-	return io.ReadAll(c.decompressor)
+	dc := decompressors.Get().(*Decompressor)
+	defer decompressors.Put(dc)
+	return dc.decompress(payload)
 }
 
 func (c *Connection) compress(payload []byte) ([]byte, error) {
-	buf := &bytes.Buffer{}
-	cp := c.compressor
-	cp.Reset(buf)
-
-	if _, err := cp.Write(payload); err != nil {
-		return nil, err
-	}
-	if err := cp.Flush(); err != nil {
-		return nil, err
-	}
-
-	b := buf.Bytes()
-	return b[:len(b)-4], nil
+	cp := compressors.Get().(*Compressor)
+	defer compressors.Put(cp)
+	return cp.compress(payload)
 }
 
 func (c *Connection) handleControl(frame Frame) error {
