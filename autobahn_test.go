@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,8 +10,15 @@ import (
 	"time"
 
 	"github.com/ory/dockertest/v3"
+	"golang.org/x/sync/errgroup"
 )
 
+// use autobahn docker container to run test against our echo server
+// - starts echo
+// - run autobahn docker
+// - autobahn runs tests on echo server (tests defined in config/client.json)
+// - wait for docker to exit
+// - analyze test reports
 func TestAutobahn(t *testing.T) {
 	address := "localhost:9001"
 	cwd, _ := os.Getwd()
@@ -21,13 +29,20 @@ func TestAutobahn(t *testing.T) {
 		t.Fatalf("remove reports folder %s", err)
 	}
 
-	go func() {
-		if err := runEchoServer(address); err != nil {
-			panic(err)
-		}
-	}()
+	// start echo server
+	ctx, stop := context.WithCancel(context.Background())
+	var g errgroup.Group
+	g.Go(func() error {
+		return Serve(ctx, address, echo)
+	})
 
 	runContainer(t, cwd)
+
+	// stop echo server and get error if any
+	stop()
+	if err := g.Wait(); err != nil {
+		t.Fatalf("echo server failed %s", err)
+	}
 
 	analyzeReports(t, reportsFolder)
 }
@@ -94,7 +109,7 @@ func analyzeReports(t *testing.T, reportsFolder string) {
 		var c Case
 		json.Unmarshal(buf, &c)
 
-		t.Logf("%-6s %s %s", c.ID, c.Behavior, c.BehaviorClose)
+		t.Logf("%-7s %s %s", c.ID, c.Behavior, c.BehaviorClose)
 		if c.Behavior == "INFORMATIONAL" {
 			continue
 		}

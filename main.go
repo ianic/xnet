@@ -2,42 +2,65 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"net"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 )
 
+// InteruptContext returns context which will be closed on application interupt
+func InteruptContext() context.Context {
+	ctx, stop := context.WithCancel(context.Background())
+	go func() {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
+		<-c
+		stop()
+	}()
+	return ctx
+}
+
 func main() {
 	address := "localhost:9001"
-	if err := runEchoServer(address); err != nil {
-		fmt.Println("error:", err.Error())
-		os.Exit(1)
+
+	ctx := InteruptContext()
+	if err := Serve(ctx, address, echo); err != nil {
+		log.Fatal(err)
 	}
 }
 
-func runEchoServer(address string) error {
-	listener, err := net.Listen("tcp", address)
+func Serve(ctx context.Context, address string, handler func(net.Conn)) error {
+	nl, err := net.Listen("tcp", address)
 	if err != nil {
 		return err
 	}
-	defer listener.Close()
+
+	go func() {
+		<-ctx.Done()
+		nl.Close()
+	}()
 	// fmt.Println("Listening on ", address)
 	for {
-		conn, err := listener.Accept()
+		conn, err := nl.Accept()
 		if err != nil {
-			return err
+			if !errors.Is(err, net.ErrClosed) {
+				return err
+			}
+			break
 		}
-		go handleRequest(conn)
+		go handler(conn)
 	}
+	return nil
 }
 
-func handleRequest(conn net.Conn) {
-	defer conn.Close()
-	ws, err := handshake(conn)
+func echo(nc net.Conn) {
+	defer nc.Close()
+	ws, err := handshake(nc)
 	if err != nil {
 		log.Printf("handshake failed %s", err)
 		return
