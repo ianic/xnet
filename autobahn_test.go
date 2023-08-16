@@ -1,4 +1,4 @@
-package main
+package ws
 
 import (
 	"context"
@@ -33,7 +33,7 @@ func TestAutobahn(t *testing.T) {
 	ctx, stop := context.WithCancel(context.Background())
 	var g errgroup.Group
 	g.Go(func() error {
-		return Serve(ctx, address, echo)
+		return Serve(ctx, address, Echo)
 	})
 
 	runContainer(t, cwd)

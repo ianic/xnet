@@ -1,4 +1,4 @@
-package main
+package ws
 
 import (
 	"bytes"
@@ -9,7 +9,7 @@ import (
 )
 
 // WebSocket connection
-type Connection struct {
+type Conn struct {
 	conn      io.ReadWriter // underlaying network connection
 	rd        FrameReader
 	extension Extension
@@ -18,8 +18,8 @@ type Connection struct {
 	compressor   *flate.Writer
 }
 
-func NewConnection(conn io.ReadWriter, extension Extension) Connection {
-	ws := Connection{
+func NewConnection(conn io.ReadWriter, extension Extension) Conn {
+	ws := Conn{
 		conn:      conn,
 		rd:        NewFrameReader(conn),
 		extension: extension,
@@ -67,7 +67,7 @@ func (msg Message) Buffers() net.Buffers {
 	return frame.Buffers()
 }
 
-func (c *Connection) Read() (Message, error) {
+func (c *Conn) Read() (Message, error) {
 	var msg Message
 	fragment := fragmentUnfragmented
 	compressed := false
@@ -115,19 +115,19 @@ func (c *Connection) Read() (Message, error) {
 	}
 }
 
-func (c *Connection) decompress(payload []byte) ([]byte, error) {
+func (c *Conn) decompress(payload []byte) ([]byte, error) {
 	dc := decompressors.Get().(*Decompressor)
 	defer decompressors.Put(dc)
 	return dc.decompress(payload)
 }
 
-func (c *Connection) compress(payload []byte) ([]byte, error) {
+func (c *Conn) compress(payload []byte) ([]byte, error) {
 	cp := compressors.Get().(*Compressor)
 	defer compressors.Put(cp)
 	return cp.compress(payload)
 }
 
-func (c *Connection) handleControl(frame Frame) error {
+func (c *Conn) handleControl(frame Frame) error {
 	switch frame.opcode {
 	case Ping:
 		pong := Frame{opcode: Pong, payload: frame.payload}
@@ -142,7 +142,7 @@ func (c *Connection) handleControl(frame Frame) error {
 	}
 }
 
-func (c *Connection) Write(msg Message) error {
+func (c *Conn) Write(msg Message) error {
 	payload := msg.Payload
 	if c.extension.permessageDeflate {
 		var err error

@@ -1,4 +1,4 @@
-package main
+package ws
 
 import (
 	"bytes"
@@ -7,32 +7,8 @@ import (
 	"io"
 	"log"
 	"net"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 )
-
-// InteruptContext returns context which will be closed on application interupt
-func InteruptContext() context.Context {
-	ctx, stop := context.WithCancel(context.Background())
-	go func() {
-		c := make(chan os.Signal, 1)
-		signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
-		<-c
-		stop()
-	}()
-	return ctx
-}
-
-func main() {
-	address := "localhost:9001"
-
-	ctx := InteruptContext()
-	if err := Serve(ctx, address, echo); err != nil {
-		log.Fatal(err)
-	}
-}
 
 func Serve(ctx context.Context, address string, handler func(net.Conn)) error {
 	nl, err := net.Listen("tcp", address)
@@ -58,7 +34,7 @@ func Serve(ctx context.Context, address string, handler func(net.Conn)) error {
 	return nil
 }
 
-func echo(nc net.Conn) {
+func Echo(nc net.Conn) {
 	defer nc.Close()
 	ws, err := handshake(nc)
 	if err != nil {
@@ -82,7 +58,7 @@ func echo(nc net.Conn) {
 	}
 }
 
-func handshake(conn net.Conn) (*Connection, error) {
+func handshake(conn net.Conn) (*Conn, error) {
 	deadline := time.Now().Add(time.Second * 15)
 	conn.SetReadDeadline(deadline)
 
