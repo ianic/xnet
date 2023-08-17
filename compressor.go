@@ -20,6 +20,18 @@ var decompressors = sync.Pool{
 	},
 }
 
+func Decompress(payload []byte) ([]byte, error) {
+	dc := decompressors.Get().(*Decompressor)
+	defer decompressors.Put(dc)
+	return dc.decompress(payload)
+}
+
+func Compress(payload []byte) ([]byte, error) {
+	cp := compressors.Get().(*Compressor)
+	defer compressors.Put(cp)
+	return cp.compress(payload)
+}
+
 type Compressor struct {
 	w *flate.Writer
 }
@@ -56,6 +68,8 @@ func NewDecompressor() *Decompressor {
 		r: flate.NewReader(nil),
 	}
 }
+
+var compressLastBlock = []byte{0x00, 0x00, 0xff, 0xff, 0x01, 0x00, 0x00, 0xff, 0xff}
 
 func (c *Decompressor) decompress(payload []byte) ([]byte, error) {
 	rd := bytes.NewReader(append(payload, compressLastBlock...))

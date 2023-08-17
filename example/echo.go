@@ -23,6 +23,8 @@ func InteruptContext() context.Context {
 }
 
 func main() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
 	address := "localhost:9001"
 
 	ctx := InteruptContext()

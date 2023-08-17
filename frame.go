@@ -51,23 +51,24 @@ const (
 	Close        OpCode = 8
 	Ping         OpCode = 9
 	Pong         OpCode = 0xa
+	None         OpCode = 0xff
 )
 
 type Fragment byte
 
 const (
-	fragmentUnfragmented Fragment = iota
-	fragmentStart
-	fragmentMiddle
-	fragmentEnd
+	fragNone   Fragment = iota // single frame message
+	fragFirst                  // first frame of message fragmented into multiple frames
+	fragMiddle                 // middle frame of fragmented message
+	fragLast                   // last frame of fragmented message
 )
 
 func (curr Fragment) isValidContinuation(prev Fragment) bool {
 	switch prev {
-	case fragmentUnfragmented, fragmentEnd:
-		return curr == fragmentUnfragmented || curr == fragmentStart
-	case fragmentStart, fragmentMiddle:
-		return curr == fragmentMiddle || curr == fragmentEnd
+	case fragNone, fragLast:
+		return curr == fragNone || curr == fragFirst
+	case fragFirst, fragMiddle:
+		return curr == fragMiddle || curr == fragLast
 	}
 	panic("unreachable")
 }
@@ -92,39 +93,41 @@ const (
 )
 
 type Frame struct {
-	payload []byte
-	flags   byte
-	opcode  OpCode
+	payload  []byte
+	opcode   OpCode
+	flags    byte
+	fin      bool
+	deflated bool
 }
 
-func (f Frame) Fin() bool {
-	return f.flags&finMask != 0
-}
-
-func (f Frame) Rsv1() bool {
+func (f Frame) rsv1() bool {
 	return f.flags&rsv1Mask != 0
 }
 
-func (f Frame) Rsv2() bool {
+func (f Frame) rsv2() bool {
 	return f.flags&rsv2Mask != 0
 }
 
-func (f Frame) Rsv3() bool {
+func (f Frame) rsv3() bool {
 	return f.flags&rsv3Mask != 0
 }
 
 func (f Frame) fragment() Fragment {
-	if f.Fin() {
+	if f.fin {
 		if f.opcode == Continuation {
-			return fragmentEnd
+			return fragLast
 		}
-		return fragmentUnfragmented
+		return fragNone
 	}
 	if f.opcode == Continuation {
-		return fragmentMiddle
+		return fragMiddle
 	}
 	// not fin and opcode binary or text
-	return fragmentStart
+	return fragFirst
+}
+
+func (f Frame) first() bool {
+	return f.opcode != Continuation
 }
 
 func (f Frame) verifyContinuation(prev Fragment) error {
@@ -158,7 +161,7 @@ func (f Frame) closePayload() []byte {
 }
 
 func (f Frame) verify() error {
-	if f.Rsv2() || f.Rsv3() {
+	if f.rsv2() || f.rsv3() {
 		return ErrReservedRsv
 	}
 	if err := f.opcode.verify(); err != nil {
@@ -196,17 +199,17 @@ func (f Frame) verifyControl() error {
 	if len(f.payload) > 125 {
 		return ErrTooBigPayloadForControlFrame
 	}
-	if !f.Fin() {
+	if !f.fin {
 		return ErrFragmentedControlFrame
 	}
 	return nil
 }
 
 func (f Frame) verifyRsvBits(deflateSupported bool) error {
-	if f.Rsv1() && !deflateSupported {
+	if f.rsv1() && !deflateSupported {
 		return ErrDeflateNotSupported
 	}
-	if f.Rsv2() || f.Rsv3() {
+	if f.rsv2() || f.rsv3() {
 		return ErrReservedRsv
 	}
 	return nil
@@ -288,7 +291,13 @@ func newFrame(rd *bufio.Reader) (Frame, error) {
 	}
 
 	// create and verify frame
-	frame := Frame{flags: flags, opcode: opcode, payload: payload}
+	frame := Frame{
+		payload:  payload,
+		opcode:   opcode,
+		flags:    flags,
+		fin:      flags&finMask != 0,
+		deflated: flags&rsv1Mask != 0,
+	}
 	if err := frame.verify(); err != nil {
 		return Frame{}, err
 	}
@@ -320,13 +329,19 @@ func NewFrameReader(rd io.Reader) FrameReader {
 }
 
 // TODO masked version
-func (f Frame) Header() []byte {
-	pbl := f.payloadLenBytes()
-	header := make([]byte, 2+pbl)
+func (f Frame) header() []byte {
+	plb := f.payloadLenBytes()
+	header := make([]byte, 2+plb)
 
-	header[0] = finMask | byte(f.opcode)
+	header[0] = byte(f.opcode)
+	if f.fin {
+		header[0] |= finMask
+	}
+	if f.deflated {
+		header[0] |= rsv1Mask
+	}
 
-	switch pbl {
+	switch plb {
 	case 0:
 		header[1] = byte(len(f.payload))
 	case 2:
@@ -350,12 +365,6 @@ func (f Frame) payloadLenBytes() int {
 	return 8
 }
 
-func (f Frame) SendTo(w io.Writer) error {
-	var buffers = net.Buffers([][]byte{f.Header(), f.payload})
-	_, err := buffers.WriteTo(w)
-	return err
-}
-
-func (f Frame) Buffers() net.Buffers {
-	return net.Buffers([][]byte{f.Header(), f.payload})
+func (f Frame) encode() net.Buffers {
+	return net.Buffers([][]byte{f.header(), f.payload})
 }

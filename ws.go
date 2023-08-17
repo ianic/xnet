@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func Serve(ctx context.Context, address string, handler func(net.Conn)) error {
+func Serve(ctx context.Context, address string, handler func(*Conn)) error {
 	nl, err := net.Listen("tcp", address)
 	if err != nil {
 		return err
@@ -22,45 +22,44 @@ func Serve(ctx context.Context, address string, handler func(net.Conn)) error {
 	}()
 	// fmt.Println("Listening on ", address)
 	for {
-		conn, err := nl.Accept()
+		nc, err := nl.Accept()
 		if err != nil {
 			if !errors.Is(err, net.ErrClosed) {
 				return err
 			}
 			break
 		}
-		go handler(conn)
+		go func(nc net.Conn) {
+			defer nc.Close()
+			ws, err := handshake(nc)
+			if err != nil {
+				return
+			}
+			handler(ws)
+		}(nc)
 	}
 	return nil
 }
 
-func Echo(nc net.Conn) {
-	defer nc.Close()
-	ws, err := handshake(nc)
-	if err != nil {
-		log.Printf("handshake failed %s", err)
-		return
-	}
-
+func Echo(ws *Conn) {
 	for {
-		msg, err := ws.Read()
+		opcode, payload, err := ws.Read()
 		if err != nil {
 			if err != io.EOF {
-				log.Printf("connection closed %s", err)
+				log.Printf("read error %s", err)
 			}
 			return
 		}
 		// fmt.Printf("%s", string(msg.Payload))
-		if err := ws.Write(msg); err != nil {
-			log.Printf("msg send error %s", err)
+		if err := ws.Write(opcode, payload); err != nil {
+			log.Printf("write error %s", err)
 			return
 		}
 	}
 }
 
 func handshake(conn net.Conn) (*Conn, error) {
-	deadline := time.Now().Add(time.Second * 15)
-	conn.SetReadDeadline(deadline)
+	conn.SetReadDeadline(fromTimeout(15 * time.Second))
 
 	pos := 0
 	buf := make([]byte, 4096)
@@ -80,8 +79,8 @@ func handshake(conn net.Conn) (*Conn, error) {
 				return nil, err
 			}
 
-			conn.SetReadDeadline(time.Time{})
-			ws := NewConnection(conn, hs.extension)
+			conn.SetReadDeadline(resetDeadline)
+			ws := NewConnection(conn, hs.extension.permessageDeflate)
 			return &ws, nil
 		}
 		pos += n

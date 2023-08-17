@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +21,8 @@ import (
 // - wait for docker to exit
 // - analyze test reports
 func TestAutobahn(t *testing.T) {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
 	address := "localhost:9001"
 	cwd, _ := os.Getwd()
 	reportsFolder := cwd + "/autobahn/reports/clients"
