@@ -44,13 +44,16 @@ func (d deadlineReader) Read(p []byte) (int, error) {
 }
 
 // Read reads message from underlying net.Conn.
-// Handles control frames. Responds on ping with pong. Responds on close.
-// If there is nothing to read for more than readTimeout sends ping frame.
-// Sends ping even if the connection was write active during read timeout.
-//
-// FrameReader uses internally bufio.Reader in default configuration. That uses
-// [4096] bytes buffer for each connection. bufio.Reader will pass [bigger reads]
-// directly to the underlying reader.
+// `opcode` can be Text or Binary, safe to ignore if you know your payload type.
+// If opcode is Text payload is then valid utf8 string.
+// Handles control frames. Responds on ping with pong. Responds on close. If
+// there is nothing to read for more than readTimeout sends ping frame. Sends
+// ping even if the connection was write active in that period (can be more
+// intelligent).
+// FrameReader uses internally bufio.Reader with default configuration. That
+// uses [4096] bytes buffer for each connection (not nice constant allocation).
+// bufio.Reader will pass [bigger reads] directly to the underlying reader (nice
+// optimization).
 //
 // [4096]: https://github.com/golang/go/blob/99b80993f607e1c6e2f4c14445de103ba6856cfc/src/bufio/bufio.go#L19
 // [bigger reads]: https://github.com/golang/go/blob/master/src/bufio/bufio.go#L228
@@ -130,7 +133,6 @@ func (c *Conn) readFrame() (Frame, error) {
 	for {
 		c.nc.SetReadDeadline(fromTimeout(readTimeout))
 		frame, err := c.rd.Read()
-
 		if err != nil {
 			if errors.Is(err, os.ErrDeadlineExceeded) {
 				if err := c.onReadDeadline(); err != nil {
@@ -193,7 +195,6 @@ func (c *Conn) Write(opcode OpCode, payload []byte) error {
 
 // buffers.Write on [unix] systems will call [Writev]. Writev locks at enter so
 // it is safe to call it from multiple goroutines.
-//
 // If we have concurrent calls to this write they will lock after setting
 // deadline, so deadline includes both wait for previous writes to finish and my
 // write time.

@@ -2,16 +2,17 @@ package ws
 
 import (
 	"bufio"
-	"bytes"
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Handshake struct {
@@ -30,9 +31,29 @@ type Extension struct {
 }
 
 const (
-	crlf       = "\r\n"
-	requestEnd = crlf + crlf
+	crlf             = "\r\n"
+	requestEnd       = crlf + crlf
+	handshakeTimeout = 15 * time.Second
 )
+
+// New creates new WebSocket connection from raw tcp connection.
+// Reads http upgrade request from client and sends response.
+func New(nc net.Conn) (*Conn, error) {
+	nc.SetReadDeadline(fromTimeout(handshakeTimeout))
+
+	hs, err := NewHandshake(bufio.NewReader(nc))
+	if err != nil {
+		return nil, err
+	}
+	_, err = nc.Write([]byte(hs.Response()))
+	if err != nil {
+		return nil, err
+	}
+
+	nc.SetReadDeadline(resetDeadline)
+	ws := NewConnection(nc, hs.extension.permessageDeflate)
+	return &ws, nil
+}
 
 func (hs *Handshake) Response() string {
 	var b strings.Builder
@@ -57,8 +78,7 @@ func (hs *Handshake) Response() string {
 	return fmt.Sprintf(b.String(), secAccept(hs.key))
 }
 
-func NewHandshake(buf []byte) (Handshake, error) {
-	reader := bufio.NewReader(bytes.NewReader(buf))
+func NewHandshake(reader *bufio.Reader) (Handshake, error) {
 	req, err := http.ReadRequest(reader)
 	if err != nil {
 		return Handshake{}, err

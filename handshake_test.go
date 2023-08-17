@@ -1,13 +1,15 @@
 package ws
 
 import (
+	"bufio"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestParse(t *testing.T) {
-	hs, err := NewHandshake([]byte(http_request))
+	hs, err := NewHandshake(bufio.NewReader(strings.NewReader(testRequest)))
 	assert.NoError(t, err)
 
 	assert.Equal(t, "13", hs.version)
@@ -39,7 +41,7 @@ func TestSecAccept(t *testing.T) {
 	assert.Equal(t, "ELgfPf42E81xadzWVke1JyXNmqU=", secAccept("/Hua7JHfD1waXr47jL/uAg=="))
 }
 
-const http_request = "GET ws://ws.example.com/ws HTTP/1.1\r\n" +
+const testRequest = "GET ws://ws.example.com/ws HTTP/1.1\r\n" +
 	"Host: ws.example.com\r\n" +
 	"Upgrade: websocket\r\n" +
 	"Connection: Upgrade\r\n" +
