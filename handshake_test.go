@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestParse(t *testing.T) {
+func TestHandshake(t *testing.T) {
 	hs, err := NewHandshake(bufio.NewReader(strings.NewReader(testRequest)))
 	if err != nil {
 		t.Fatal(err)
