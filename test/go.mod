@@ -1,4 +1,4 @@
-module github.com/ianic/ws
+module github.com/ianic/ws/test
 
 go 1.21.0
 
@@ -33,4 +33,10 @@ require (
 	golang.org/x/sys v0.7.0 // indirect
 	golang.org/x/tools v0.7.0 // indirect
 	gopkg.in/yaml.v2 v2.3.0 // indirect
+)
+
+require github.com/ianic/ws v0.0.0
+
+replace (
+	github.com/ianic/ws => ../
 )
