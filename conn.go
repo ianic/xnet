@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"bufio"
 	"errors"
 	"io"
 	"net"
@@ -17,17 +18,16 @@ const (
 // WebSocket connection
 type Conn struct {
 	nc                net.Conn // underlying network connection
-	rd                FrameReader
+	fr                FrameReader
 	permessageDeflate bool
 }
 
-func NewConnection(nc net.Conn, permessageDeflate bool) Conn {
-	ws := Conn{
+func NewConnection(nc net.Conn, br *bufio.Reader, permessageDeflate bool) Conn {
+	return Conn{
 		nc:                nc,
-		rd:                NewFrameReader(deadlineReader{nc: nc}),
+		fr:                FrameReader{rd: br},
 		permessageDeflate: permessageDeflate,
 	}
-	return ws
 }
 
 // deadlineReader is a wrapper around net.Conn that sets read deadline before
@@ -68,7 +68,7 @@ func (c *Conn) Read() (OpCode, []byte, error) {
 func (c *Conn) read() (OpCode, []byte, error) {
 	var payload []byte
 	opcode := None
-	prevFrameFragment := fragNone
+	prevFrameFragment := fragSingle
 	compressed := false
 
 	for {
@@ -132,7 +132,7 @@ func (c *Conn) verifyMessage(opcode OpCode, payload []byte) error {
 func (c *Conn) readFrame() (Frame, error) {
 	for {
 		c.nc.SetReadDeadline(fromTimeout(readTimeout))
-		frame, err := c.rd.Read()
+		frame, err := c.fr.Read()
 		if err != nil {
 			if errors.Is(err, os.ErrDeadlineExceeded) {
 				if err := c.onReadDeadline(); err != nil {

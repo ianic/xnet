@@ -1,7 +1,6 @@
 package ws
 
 import (
-	"bytes"
 	"io"
 	"testing"
 )
@@ -55,7 +54,7 @@ func TestNewFrame(t *testing.T) {
 }
 
 func TestParseFragmentedMessage(t *testing.T) {
-	rdr := NewFrameReader(bytes.NewReader(fragmentedMessage))
+	rdr := NewFrameReaderFromBuffer(fragmentedMessage)
 
 	frags := []struct {
 		opcode OpCode

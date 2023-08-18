@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"io"
@@ -56,4 +57,20 @@ func Echo(ws *Conn) {
 			return
 		}
 	}
+}
+
+// New creates new WebSocket connection from raw tcp connection.
+// Reads http upgrade request from client and sends response.
+func New(nc net.Conn) (*Conn, error) {
+	br := bufio.NewReader(deadlineReader{nc: nc})
+	hs, err := NewHandshake(br)
+	if err != nil {
+		return nil, err
+	}
+	_, err = nc.Write([]byte(hs.Response()))
+	if err != nil {
+		return nil, err
+	}
+	ws := NewConnection(nc, br, hs.extension.permessageDeflate)
+	return &ws, nil
 }

@@ -8,11 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 )
 
 type Handshake struct {
@@ -31,29 +29,9 @@ type Extension struct {
 }
 
 const (
-	crlf             = "\r\n"
-	requestEnd       = crlf + crlf
-	handshakeTimeout = 15 * time.Second
+	crlf       = "\r\n"
+	requestEnd = crlf + crlf
 )
-
-// New creates new WebSocket connection from raw tcp connection.
-// Reads http upgrade request from client and sends response.
-func New(nc net.Conn) (*Conn, error) {
-	nc.SetReadDeadline(fromTimeout(handshakeTimeout))
-
-	hs, err := NewHandshake(bufio.NewReader(nc))
-	if err != nil {
-		return nil, err
-	}
-	_, err = nc.Write([]byte(hs.Response()))
-	if err != nil {
-		return nil, err
-	}
-
-	nc.SetReadDeadline(resetDeadline)
-	ws := NewConnection(nc, hs.extension.permessageDeflate)
-	return &ws, nil
-}
 
 func (hs *Handshake) Response() string {
 	var b strings.Builder

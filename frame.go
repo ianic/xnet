@@ -57,7 +57,7 @@ const (
 type Fragment byte
 
 const (
-	fragNone   Fragment = iota // single frame message
+	fragSingle Fragment = iota // single frame message
 	fragFirst                  // first frame of message fragmented into multiple frames
 	fragMiddle                 // middle frame of fragmented message
 	fragLast                   // last frame of fragmented message
@@ -65,8 +65,8 @@ const (
 
 func (curr Fragment) isValidContinuation(prev Fragment) bool {
 	switch prev {
-	case fragNone, fragLast:
-		return curr == fragNone || curr == fragFirst
+	case fragSingle, fragLast:
+		return curr == fragSingle || curr == fragFirst
 	case fragFirst, fragMiddle:
 		return curr == fragMiddle || curr == fragLast
 	}
@@ -117,7 +117,7 @@ func (f Frame) fragment() Fragment {
 		if f.opcode == Continuation {
 			return fragLast
 		}
-		return fragNone
+		return fragSingle
 	}
 	if f.opcode == Continuation {
 		return fragMiddle
@@ -144,7 +144,7 @@ func (f Frame) closeCode() uint16 {
 	if f.opcode != Close {
 		return 0
 	}
-	if len(f.payload) == 1 { //invalid
+	if len(f.payload) == 1 { // invalid
 		return 0
 	}
 	if len(f.payload) == 0 {
@@ -185,6 +185,7 @@ func (f Frame) verifyClose() error {
 	}
 	return f.verifyCloseCode()
 }
+
 func (f Frame) verifyCloseCode() error {
 	cc := f.closeCode()
 	if (cc >= 1000 && cc <= 1003) ||
@@ -324,8 +325,13 @@ func (r FrameReader) Read() (Frame, error) {
 	return newFrame(r.rd)
 }
 
-func NewFrameReader(rd io.Reader) FrameReader {
-	return FrameReader{rd: bufio.NewReader(rd)}
+func NewFrameReader(br *bufio.Reader) FrameReader {
+	return FrameReader{rd: br}
+}
+
+func NewFrameReaderFromBuffer(buf []byte) FrameReader {
+	br := bufio.NewReader(bytes.NewReader(buf))
+	return NewFrameReader(br)
 }
 
 // TODO masked version
