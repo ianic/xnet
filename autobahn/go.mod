@@ -1,4 +1,4 @@
-module github.com/ianic/ws/test
+module github.com/ianic/ws/autobahn
 
 go 1.21.0
 

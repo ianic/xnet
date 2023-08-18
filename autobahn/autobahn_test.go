@@ -26,7 +26,7 @@ func TestAutobahn(t *testing.T) {
 
 	address := "localhost:9001"
 	cwd, _ := os.Getwd()
-	reportsFolder := cwd + "/autobahn/reports/clients"
+	reportsFolder := cwd + "/reports/clients"
 
 	// remove all reports
 	if err := os.RemoveAll(reportsFolder); err != nil {
@@ -69,8 +69,8 @@ func runContainer(t *testing.T, cwd string) {
 		Tag:        "0.8.2",
 		Cmd:        []string{"wstest", "--mode", "fuzzingclient", "--spec", "/config/client.json"},
 		Mounts: []string{
-			cwd + "/autobahn/config:/config",
-			cwd + "/autobahn/reports:/reports",
+			cwd + "/config:/config",
+			cwd + "/reports:/reports",
 		},
 	}
 	// pulls an image, creates a container based on it and runs it
