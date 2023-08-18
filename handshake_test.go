@@ -4,41 +4,58 @@ import (
 	"bufio"
 	"strings"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
 )
 
 func TestParse(t *testing.T) {
 	hs, err := NewHandshake(bufio.NewReader(strings.NewReader(testRequest)))
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	assert.Equal(t, "13", hs.version)
-	assert.Equal(t, "3yMLSWFdF1MH1YDDPW/aYQ==", hs.key)
-	assert.Equal(t, "ws.example.com", hs.host)
+	if hs.version != "13" ||
+		hs.key != "3yMLSWFdF1MH1YDDPW/aYQ==" ||
+		hs.host != "ws.example.com" {
+		t.Fatalf("basic headers")
+	}
 
-	assert.True(t, hs.extension.permessageDeflate)
-	assert.Equal(t, 12, hs.extension.serverMaxWindowBits)
-	assert.Equal(t, 13, hs.extension.clientMaxWindowBits)
+	if !hs.extension.permessageDeflate ||
+		hs.extension.serverMaxWindowBits != 12 ||
+		hs.extension.clientMaxWindowBits != 13 {
+		t.Fatalf("extension header")
+	}
 
 	const expected = "HTTP/1.1 101 Switching Protocols\r\n" +
 		"Upgrade: websocket\r\n" +
 		"Connection: Upgrade\r\n" +
 		"Sec-WebSocket-Accept: 9bQuZIN64KrRsqgxuR1CxYN94zQ=\r\n" +
 		"Sec-WebSocket-Extensions: permessage-deflate; client_no_context_takeover; server_no_context_takeover\r\n\r\n"
-	assert.Equal(t, expected, hs.Response())
+	if hs.Response() != expected {
+		t.Fatalf("unexpected response")
+	}
 }
 
 func TestSecKey(t *testing.T) {
 	key, err := secKey()
-	assert.NoError(t, err)
-	assert.Len(t, key, 24)
-	// fmt.Println(key)
+	if err != nil ||
+		len(key) != 24 {
+		t.Fatal()
+	}
 }
 
 func TestSecAccept(t *testing.T) {
-	assert.Equal(t, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", secAccept("dGhlIHNhbXBsZSBub25jZQ=="))
-	assert.Equal(t, "9bQuZIN64KrRsqgxuR1CxYN94zQ=", secAccept("3yMLSWFdF1MH1YDDPW/aYQ=="))
-	assert.Equal(t, "ELgfPf42E81xadzWVke1JyXNmqU=", secAccept("/Hua7JHfD1waXr47jL/uAg=="))
+	cases := []struct {
+		key       string
+		acceptKey string
+	}{
+		{"dGhlIHNhbXBsZSBub25jZQ==", "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="},
+		{"3yMLSWFdF1MH1YDDPW/aYQ==", "9bQuZIN64KrRsqgxuR1CxYN94zQ="},
+		{"/Hua7JHfD1waXr47jL/uAg==", "ELgfPf42E81xadzWVke1JyXNmqU="},
+	}
+	for i, c := range cases {
+		if c.acceptKey != secAccept((c.key)) {
+			t.Fatalf("unexpected accept key in case %d", i)
+		}
+	}
 }
 
 const testRequest = "GET ws://ws.example.com/ws HTTP/1.1\r\n" +

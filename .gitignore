@@ -1,3 +1,4 @@
 ws
 .vscode
-autobahn/reports
+test/autobahn/reports
+example/example

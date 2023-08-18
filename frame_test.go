@@ -2,10 +2,8 @@ package ws
 
 import (
 	"bytes"
+	"io"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -28,86 +26,69 @@ var (
 )
 
 func TestNewFrame(t *testing.T) {
-	f, err := NewFrameFromBuffer(helloFrame)
-	assert.NoError(t, err)
-	assert.True(t, f.fin)
-	assert.False(t, f.rsv1())
-	assert.False(t, f.rsv2())
-	assert.False(t, f.rsv3())
-	assert.Equal(t, Text, f.opcode)
-	assert.Equal(t, []byte("Hello"), f.payload)
+	cases := []struct {
+		data      []byte
+		expected  Frame
+		closeCode uint16
+	}{
+		{helloFrame, Frame{fin: true, opcode: Text, payload: []byte("Hello")}, 0},
+		{maskedHelloFrame, Frame{fin: true, opcode: Text, payload: []byte("Hello")}, 0},
+		{pingFrame, Frame{fin: true, opcode: Ping}, 0},
+		{pongFrame, Frame{fin: true, opcode: Pong}, 0},
+		{closeFrame, Frame{fin: true, opcode: Close, payload: []byte{0x03, 0xe9}}, 1001},
+	}
 
-	f, err = NewFrameFromBuffer(maskedHelloFrame)
-	require.NoError(t, err)
-	assert.True(t, f.fin)
-	assert.False(t, f.rsv1())
-	assert.False(t, f.rsv2())
-	assert.False(t, f.rsv3())
-	assert.Equal(t, Text, f.opcode)
-	assert.Equal(t, []byte("Hello"), f.payload)
-}
-
-func TestNewFrameOpcode(t *testing.T) {
-	f, err := NewFrameFromBuffer(helloFrame)
-	assert.NoError(t, err)
-	assert.Equal(t, Text, f.opcode)
-
-	f, err = NewFrameFromBuffer(pingFrame)
-	assert.NoError(t, err)
-	assert.Equal(t, Ping, f.opcode)
-
-	f, err = NewFrameFromBuffer(pongFrame)
-	assert.NoError(t, err)
-	assert.Equal(t, Pong, f.opcode)
-
-	f, err = NewFrameFromBuffer(closeFrame)
-	assert.NoError(t, err)
-	assert.Equal(t, Close, f.opcode)
+	for i, c := range cases {
+		f, err := NewFrameFromBuffer(c.data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.expected.fin != f.fin ||
+			c.expected.opcode != f.opcode ||
+			string(c.expected.payload) != string(f.payload) {
+			t.Fatalf("case %d %v", i, f)
+		}
+		if c.closeCode != f.closeCode() {
+			t.Fatalf("case %d unexpected close code %d", i, f.closeCode())
+		}
+	}
 }
 
 func TestParseFragmentedMessage(t *testing.T) {
 	rdr := NewFrameReader(bytes.NewReader(fragmentedMessage))
 
-	f1, err := rdr.Read()
-	assert.NoError(t, err)
-	require.NotNil(t, f1)
-	assert.Equal(t, f1.opcode, Text)
-	assert.False(t, f1.fin)
+	frags := []struct {
+		opcode OpCode
+		fin    bool
+	}{
+		{Text, false},
+		{Ping, true},
+		{Continuation, false},
+		{Pong, true},
+		{Continuation, true},
+	}
 
-	fp, err := rdr.Read()
-	assert.NoError(t, err)
-	require.NotNil(t, fp)
-	assert.Equal(t, fp.opcode, Ping)
-	assert.True(t, fp.fin)
+	var payload []byte
+	for i, e := range frags {
+		a, err := rdr.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.fin != a.fin ||
+			e.opcode != a.opcode {
+			t.Fatalf("unexpected fragment %d", i)
+		}
+		if a.opcode == Text || a.opcode == Continuation {
+			payload = append(payload, a.payload...)
+		}
 
-	f2, err := rdr.Read()
-	assert.NoError(t, err)
-	require.NotNil(t, f2)
-	assert.Equal(t, f2.opcode, Continuation)
-	assert.False(t, f1.fin)
+	}
+	if string(payload) != "Hello!" {
+		t.Fatalf("payload")
+	}
 
-	fo, err := rdr.Read()
-	assert.NoError(t, err)
-	require.NotNil(t, fo)
-	assert.Equal(t, fo.opcode, Pong)
-	assert.True(t, fo.fin)
-
-	f3, err := rdr.Read()
-	assert.NoError(t, err)
-	require.NotNil(t, f3)
-	assert.Equal(t, f3.opcode, Continuation)
-	assert.True(t, f3.fin)
-
-	assert.Equal(t, "Hello!", string(f1.payload)+string(f2.payload)+string(f3.payload))
-
-	_, err = rdr.Read()
-	assert.Error(t, err)
-
-}
-
-func TestCloseFrame(t *testing.T) {
-	f, err := NewFrameFromBuffer(closeFrame)
-	assert.NoError(t, err)
-	assert.Equal(t, Close, f.opcode)
-	assert.Equal(t, uint16(1001), f.closeCode())
+	_, err := rdr.Read()
+	if err != io.EOF {
+		t.Fatal(err)
+	}
 }

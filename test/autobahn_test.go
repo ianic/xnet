@@ -1,4 +1,4 @@
-package ws
+package test
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ianic/ws"
 	"github.com/ory/dockertest/v3"
 	"golang.org/x/sync/errgroup"
 )
@@ -36,7 +37,7 @@ func TestAutobahn(t *testing.T) {
 	ctx, stop := context.WithCancel(context.Background())
 	var g errgroup.Group
 	g.Go(func() error {
-		return Serve(ctx, address, Echo)
+		return ws.Serve(ctx, address, ws.Echo)
 	})
 
 	runContainer(t, cwd)
