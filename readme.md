@@ -20,3 +20,11 @@ or
 ```
 go test ./... -modfile=go_test.mod -v
 ```
+
+To recreate go_test.mod from go.mod:
+```
+rm go_test.* && cp go.mod go_test.mod && \
+go get -modfile=go_test.mod github.com/klauspost/compress && \
+go get -modfile=go_test.mod github.com/ory/dockertest/v3 && \
+go get -modfile=go_test.mod golang.org/x/sync/errgroup && \
+```
