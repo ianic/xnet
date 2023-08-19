@@ -83,27 +83,15 @@ func (s *Server) loop() {
 	nextID := 0
 	for {
 		select {
-		case m, ok := <-s.chat.Updates:
+		case u, ok := <-s.chat.Updates:
 			if !ok {
 				close(s.done)
 				return
 			}
-			wc, ok := conns[m.ID]
-			if !ok {
-				log.Printf("connection not found %d", m.ID)
-				break
-			}
-			go func(u Update) {
+			if wc, ok := conns[u.ID]; ok {
 				s.wg.Add(1)
-				defer s.wg.Done()
-
-				for _, t := range u.Posts {
-					if err := wc.WriteText([]byte(t)); err != nil {
-						return
-					}
-				}
-				s.chat.Ack(u.ID, u.Ack)
-			}(m)
+				go s.update(wc, u)
+			}
 		case wc, ok := <-s.connects:
 			if !ok {
 				for _, wc := range conns {
@@ -115,11 +103,23 @@ func (s *Server) loop() {
 			nextID++
 			id := nextID
 			conns[id] = wc
+			s.wg.Add(1)
 			go s.readLoop(id, wc)
 		case id := <-s.disconnects:
 			delete(conns, id)
 		}
 	}
+}
+
+func (s *Server) update(wc *ws.Conn, u Update) {
+	defer s.wg.Done()
+
+	for _, t := range u.Posts {
+		if err := wc.WriteText([]byte(t)); err != nil {
+			return
+		}
+	}
+	s.chat.Ack(u.ID, u.Ack)
 }
 
 func (s *Server) Shutdown() {
@@ -134,19 +134,14 @@ func (s *Server) Connect(wc *ws.Conn) {
 }
 
 func (s *Server) readLoop(id int, wc *ws.Conn) {
-	s.wg.Add(1)
 	defer s.wg.Done()
 
 	s.chat.Connect(id)
 	// log.Printf("connect %d", id)
 	for {
-		opcode, payload, err := wc.Read()
+		_, payload, err := wc.Read()
 		if err != nil {
 			break
-		}
-		if opcode != ws.Text {
-			log.Printf("unhandled opcode %d", opcode)
-			continue
 		}
 		s.chat.Post(id, string(payload))
 	}
