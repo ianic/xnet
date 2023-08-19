@@ -1,6 +1,6 @@
 console.log("evo me");
 
-const ws = new WebSocket("ws://127.0.0.1:3002/ws");
+const ws = new WebSocket("ws://127.0.0.1:3000/ws");
 
 ws.onmessage = (event) => {
   console.log("onmessage", event.data);

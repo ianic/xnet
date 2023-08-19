@@ -16,7 +16,7 @@ import (
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	address := "localhost:3002"
+	address := "localhost:3000"
 	log.Printf("starting websocket server at %s", address)
 
 	chat := NewChat()
