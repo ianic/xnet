@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 
@@ -12,20 +13,8 @@ func main() {
 	address := "localhost:3002"
 	log.Printf("starting websocket server at %s", address)
 
-	input := make(chan ClientMsg)
-	output := make(chan ServerMsg)
-
-	server := Server{
-		input:    input,
-		output:   output,
-		connects: make(chan *ws.Conn),
-	}
-	chat := Chat{
-		input:  input,
-		output: output,
-	}
-	go chat.loop()
-	go server.loop()
+	chat := NewChat()
+	server := NewServer(chat)
 
 	fs := http.FileServer(http.Dir("./static"))
 	http.Handle("/", fs)
@@ -36,9 +25,7 @@ func main() {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		// log.Printf("ws connect OK")
 		server.Connect(wc)
-		// Echo(wc)
 	})
 	err := http.ListenAndServe(address, nil)
 	if err != nil {
@@ -46,32 +33,18 @@ func main() {
 	}
 }
 
-type ClientMsgType byte
-
-const (
-	clientPost ClientMsgType = iota
-	clientConnect
-	clientDisconnect
-	clientAck
-)
-
-type ClientMsg struct {
-	ClientID int
-	Post     string
-	Ack      int
-	Type     ClientMsgType
-}
-
-type ServerMsg struct {
-	ClientID int
-	Ack      int
-	Posts    []string
-}
-
 type Server struct {
-	input    chan ClientMsg
-	output   chan ServerMsg
+	chat     *Chat
 	connects chan *ws.Conn
+}
+
+func NewServer(chat *Chat) *Server {
+	s := Server{
+		chat:     chat,
+		connects: make(chan *ws.Conn),
+	}
+	go s.loop()
+	return &s
 }
 
 func (s *Server) loop() {
@@ -79,31 +52,25 @@ func (s *Server) loop() {
 	nextID := 0
 	for {
 		select {
-		case m := <-s.output:
-			wc, ok := conns[m.ClientID]
+		case m := <-s.chat.Updates:
+			wc, ok := conns[m.ID]
 			if !ok {
-				log.Printf("connection not found %d", m.ClientID)
+				log.Printf("connection not found %d", m.ID)
 				break
 			}
-			go func(m ServerMsg) {
-				if m.Posts != nil {
-					for _, t := range m.Posts {
-						if err := wc.WriteText([]byte(t)); err != nil {
-							return
-						}
+			go func(u Update) {
+				for _, t := range u.Posts {
+					if err := wc.WriteText([]byte(t)); err != nil {
+						return
 					}
 				}
-				s.input <- ClientMsg{
-					ClientID: m.ClientID,
-					Ack:      m.Ack,
-					Type:     clientAck,
-				}
+				s.chat.Ack(u.ID, u.Ack)
 			}(m)
 		case wc := <-s.connects:
 			nextID++
-			clientID := nextID
-			conns[clientID] = wc
-			go s.readLoop(clientID, wc)
+			id := nextID
+			conns[id] = wc
+			go s.readLoop(id, wc)
 		}
 	}
 }
@@ -112,9 +79,9 @@ func (s *Server) Connect(wc *ws.Conn) {
 	s.connects <- wc
 }
 
-func (s *Server) readLoop(clientID int, wc *ws.Conn) {
-	log.Printf("connect %d", clientID)
-	s.input <- ClientMsg{ClientID: clientID, Type: clientConnect}
+func (s *Server) readLoop(id int, wc *ws.Conn) {
+	s.chat.Connect(id)
+	log.Printf("connect %d", id)
 	for {
 		opcode, payload, err := wc.Read()
 		if err != nil {
@@ -124,15 +91,41 @@ func (s *Server) readLoop(clientID int, wc *ws.Conn) {
 			log.Printf("unhandled opcode %d", opcode)
 			continue
 		}
-		s.input <- ClientMsg{ClientID: clientID, Type: clientPost, Post: string(payload)}
+		s.chat.Post(id, string(payload))
 	}
-	s.input <- ClientMsg{ClientID: clientID, Type: clientDisconnect}
-	log.Printf("disconnect %d", clientID)
+	s.chat.Disconnect(id)
+	log.Printf("disconnect %d", id)
+}
+
+type Update struct {
+	ID    int
+	Ack   int
+	Posts []string
 }
 
 type Chat struct {
-	input  chan ClientMsg
-	output chan ServerMsg
+	Updates chan Update
+
+	connects    chan int
+	disconnects chan int
+	posts       chan post
+	acks        chan ack
+
+	clients map[int]*Client
+	state   []string
+}
+
+func NewChat() *Chat {
+	c := Chat{
+		Updates:     make(chan Update),
+		connects:    make(chan int),
+		disconnects: make(chan int),
+		acks:        make(chan ack),
+		posts:       make(chan post),
+		clients:     make(map[int]*Client),
+	}
+	go c.loop()
+	return &c
 }
 
 type Client struct {
@@ -140,62 +133,96 @@ type Client struct {
 	active bool
 }
 
-func (chat *Chat) loop() {
-	clients := make(map[int]*Client)
-	var state []string
+func (c *Chat) Connect(id int) {
+	c.connects <- id
+}
 
-	for m := range chat.input {
-		switch m.Type {
-		case clientConnect:
-			client := &Client{
-				pos:    0,
-				active: true,
-			}
-			clients[m.ClientID] = client
-			ack := len(state)
-			if ack > 0 {
-				client.active = true
-				chat.output <- ServerMsg{
-					ClientID: m.ClientID,
-					Ack:      ack,
-					Posts:    state[client.pos:ack],
-				}
-			}
-		case clientDisconnect:
-			delete(clients, m.ClientID)
-		case clientAck:
-			client, ok := clients[m.ClientID]
-			if !ok {
-				panic("client not found")
-			}
-			client.pos = m.Ack
-			client.active = false
-			ack := len(state)
-			if len(state) > client.pos {
-				client.active = true
-				chat.output <- ServerMsg{
-					ClientID: m.ClientID,
-					Ack:      ack,
-					Posts:    state[client.pos:ack],
-				}
-			}
-		case clientPost:
-			if len(m.Post) == 0 {
-				continue
-			}
-			state = append(state, m.Post)
-			for id, client := range clients {
-				if client.active {
-					continue
-				}
-				ack := len(state)
-				client.active = true
-				chat.output <- ServerMsg{
-					ClientID: id,
-					Ack:      ack,
-					Posts:    state[client.pos:ack],
-				}
-			}
+func (c *Chat) connect(id int) {
+	client := &Client{
+		pos:    0,
+		active: false,
+	}
+	c.clients[id] = client
+	c.update(id, client)
+}
+
+func (c *Chat) Disconnect(id int) {
+	c.disconnects <- id
+}
+
+func (c *Chat) disconnect(id int) {
+	delete(c.clients, id)
+}
+
+type post struct {
+	id   int
+	text string
+}
+
+func (c *Chat) Post(id int, text string) {
+	if len(text) == 0 {
+		return
+	}
+	c.posts <- post{id: id, text: text}
+}
+
+func (c *Chat) post(p post) {
+	c.state = append(c.state, fmt.Sprintf("%d: %s", p.id, p.text))
+	c.updateAll()
+}
+
+func (c *Chat) updateAll() {
+	for id, client := range c.clients {
+		c.update(id, client)
+	}
+}
+
+func (c *Chat) update(id int, client *Client) {
+	if client.active {
+		return
+	}
+	pos := len(c.state)
+	if client.pos >= pos {
+		return
+	}
+	client.active = true
+	c.Updates <- Update{
+		ID:    id,
+		Ack:   pos,
+		Posts: c.state[client.pos:pos],
+	}
+}
+
+func (c *Chat) Ack(id int, pos int) {
+	c.acks <- ack{id: id, pos: pos}
+}
+
+type ack struct {
+	id  int
+	pos int
+}
+
+func (c *Chat) ack(a ack) {
+	client, ok := c.clients[a.id]
+	if !ok {
+		panic("client not found")
+	}
+	client.pos = a.pos
+	client.active = false
+	c.update(a.id, client)
+}
+
+func (c *Chat) loop() {
+	for {
+		select {
+		case clientID := <-c.connects:
+			c.connect(clientID)
+		case clientID := <-c.disconnects:
+			c.disconnect(clientID)
+		case a := <-c.acks:
+			c.ack(a)
+		case p := <-c.posts:
+			c.post(p)
 		}
 	}
 }
