@@ -1,9 +1,15 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"sync"
+	"time"
 
 	"github.com/ianic/ws"
 )
@@ -27,21 +33,46 @@ func main() {
 		}
 		server.Connect(wc)
 	})
-	err := http.ListenAndServe(address, nil)
-	if err != nil {
+
+	srv := &http.Server{
+		Addr: address,
+	}
+	go func() {
+		wait()
+		httpShutdown(srv)
+	}()
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+	server.Shutdown()
+}
+
+func wait() {
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, os.Kill)
+	<-quit
+}
+
+func httpShutdown(srv *http.Server) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return srv.Shutdown(ctx)
 }
 
 type Server struct {
-	chat     *Chat
-	connects chan *ws.Conn
+	chat        *Chat
+	connects    chan *ws.Conn
+	disconnects chan int
+	done        chan struct{}
+	wg          sync.WaitGroup
 }
 
 func NewServer(chat *Chat) *Server {
 	s := Server{
-		chat:     chat,
-		connects: make(chan *ws.Conn),
+		chat:        chat,
+		connects:    make(chan *ws.Conn),
+		disconnects: make(chan int),
+		done:        make(chan struct{}),
 	}
 	go s.loop()
 	return &s
@@ -52,13 +83,20 @@ func (s *Server) loop() {
 	nextID := 0
 	for {
 		select {
-		case m := <-s.chat.Updates:
+		case m, ok := <-s.chat.Updates:
+			if !ok {
+				close(s.done)
+				return
+			}
 			wc, ok := conns[m.ID]
 			if !ok {
 				log.Printf("connection not found %d", m.ID)
 				break
 			}
 			go func(u Update) {
+				s.wg.Add(1)
+				defer s.wg.Done()
+
 				for _, t := range u.Posts {
 					if err := wc.WriteText([]byte(t)); err != nil {
 						return
@@ -66,13 +104,29 @@ func (s *Server) loop() {
 				}
 				s.chat.Ack(u.ID, u.Ack)
 			}(m)
-		case wc := <-s.connects:
+		case wc, ok := <-s.connects:
+			if !ok {
+				for _, wc := range conns {
+					wc.Close()
+				}
+				s.connects = nil // prevent further calls
+				break
+			}
 			nextID++
 			id := nextID
 			conns[id] = wc
 			go s.readLoop(id, wc)
+		case id := <-s.disconnects:
+			delete(conns, id)
 		}
 	}
+}
+
+func (s *Server) Shutdown() {
+	close(s.connects)
+	s.wg.Wait()
+	s.chat.Close()
+	<-s.done
 }
 
 func (s *Server) Connect(wc *ws.Conn) {
@@ -80,8 +134,11 @@ func (s *Server) Connect(wc *ws.Conn) {
 }
 
 func (s *Server) readLoop(id int, wc *ws.Conn) {
+	s.wg.Add(1)
+	defer s.wg.Done()
+
 	s.chat.Connect(id)
-	log.Printf("connect %d", id)
+	// log.Printf("connect %d", id)
 	for {
 		opcode, payload, err := wc.Read()
 		if err != nil {
@@ -94,7 +151,8 @@ func (s *Server) readLoop(id int, wc *ws.Conn) {
 		s.chat.Post(id, string(payload))
 	}
 	s.chat.Disconnect(id)
-	log.Printf("disconnect %d", id)
+	s.disconnects <- id
+	// log.Printf("disconnect %d", id)
 }
 
 type Update struct {
@@ -212,10 +270,18 @@ func (c *Chat) ack(a ack) {
 	c.update(a.id, client)
 }
 
+func (c *Chat) Close() {
+	close(c.connects)
+}
+
 func (c *Chat) loop() {
 	for {
 		select {
-		case clientID := <-c.connects:
+		case clientID, ok := <-c.connects:
+			if !ok {
+				close(c.Updates)
+				return
+			}
 			c.connect(clientID)
 		case clientID := <-c.disconnects:
 			c.disconnect(clientID)
