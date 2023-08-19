@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 )
 
 // Serve starts WebSocket server listening at `address`.
@@ -40,6 +41,27 @@ func Serve(ctx context.Context, address string, connectHandler func(*Conn)) erro
 		}(nc)
 	}
 	return nil
+}
+
+func NewFromRequest(w http.ResponseWriter, r *http.Request) (*Conn, error) {
+	h, ok := w.(http.Hijacker)
+	if !ok {
+		return nil, errors.New("Response Writer don't support Hijacker interface")
+	}
+	nc, brw, err := h.Hijack()
+	if err != nil {
+		return nil, err
+	}
+	hs, err := NewHandshakeFromRequest(r)
+	if err != nil {
+		return nil, err
+	}
+	_, err = nc.Write([]byte(hs.Response()))
+	if err != nil {
+		return nil, err
+	}
+	ws := NewConnection(nc, brw.Reader, hs.extension.permessageDeflate)
+	return &ws, nil
 }
 
 // Echo all websocket messages received from client to the same client.

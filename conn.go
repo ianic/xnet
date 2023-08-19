@@ -219,3 +219,11 @@ var resetDeadline = time.Time{}
 func fromTimeout(dur time.Duration) time.Time {
 	return time.Now().Add(dur)
 }
+
+func (c *Conn) Fd() uintptr {
+	file, err := c.nc.(*net.TCPConn).File()
+	if err != nil {
+		return 0
+	}
+	return file.Fd()
+}

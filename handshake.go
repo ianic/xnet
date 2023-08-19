@@ -61,7 +61,10 @@ func NewHandshake(reader *bufio.Reader) (Handshake, error) {
 	if err != nil {
 		return Handshake{}, err
 	}
+	return NewHandshakeFromRequest(req)
+}
 
+func NewHandshakeFromRequest(req *http.Request) (Handshake, error) {
 	hs := Handshake{
 		host: req.Host,
 	}
