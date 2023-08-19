@@ -1,0 +1,4 @@
+github.com/ianic/ws v0.0.0-20230818145606-952328ae46cf h1:hVoYgMWdBxUntHItt7lxmMxgbV42t57H07wOK7zLZpc=
+github.com/ianic/ws v0.0.0-20230818145606-952328ae46cf/go.mod h1:fYJ97bIBg5XRjIFLdhGfXC6RGtJyw53zBdFZ+V7bXNo=
+github.com/klauspost/compress v1.16.7 h1:2mk3MPGNzKyxErAw8YaohYh69+pa4sIQSC0fPGCFR9I=
+github.com/klauspost/compress v1.16.7/go.mod h1:ntbaceVETuRiXiv4DpjP66DpAtAGkEQskQzEyD//IeE=
