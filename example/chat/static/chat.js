@@ -1,10 +1,12 @@
-console.log("evo me");
-
 const ws = new WebSocket("ws://127.0.0.1:3000/ws");
 
 ws.onmessage = (event) => {
-  console.log("onmessage", event.data);
-  addEntry(event.data);
+  // console.log("onmessage", event.data);
+  if (event.data instanceof Blob) {
+    event.data.text().then(s => addEntry(s));
+  } else {
+    addEntry(event.data);
+  }
 };
 
 ws.onerror = (event) => {

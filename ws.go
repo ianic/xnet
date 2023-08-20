@@ -6,8 +6,11 @@ import (
 	"errors"
 	"io"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
+	"sync"
+	"time"
 )
 
 // Serve starts WebSocket server listening at `address`.
@@ -41,6 +44,119 @@ func Serve(ctx context.Context, address string, connectHandler func(*Conn)) erro
 		}(nc)
 	}
 	return nil
+}
+
+type SessionHandler interface {
+	OnConnect(int)
+	OnDisconnect(int)
+	OnData(int, []byte)
+}
+type Session interface {
+	Send(payload []byte) error
+}
+
+type session struct {
+	conn *Conn
+}
+
+func (s *session) Send(payload []byte) error {
+	return s.conn.WriteBinary(payload)
+}
+
+type Upgrader struct {
+	handler SessionHandler
+	conns   map[int]*Conn
+	nextID  int
+	sync.Mutex
+}
+
+func NewUpgrader(handler SessionHandler) *Upgrader {
+	return &Upgrader{
+		handler: handler,
+		conns:   make(map[int]*Conn),
+	}
+}
+
+func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request) {
+	wc, err := NewFromRequest(w, r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	u.Lock()
+	u.nextID++
+	id := u.nextID
+	u.conns[id] = wc
+	u.Unlock()
+	go u.readLoop(id, wc)
+}
+
+func (u *Upgrader) readLoop(id int, wc *Conn) {
+	u.handler.OnConnect(id)
+	for {
+		_, payload, err := wc.Read()
+		if err != nil {
+			break
+		}
+		u.handler.OnData(id, payload)
+	}
+	u.handler.OnDisconnect(id)
+	u.Lock()
+	delete(u.conns, id)
+	u.Unlock()
+}
+
+func (u *Upgrader) Send(id int, data []byte) error {
+	u.Lock()
+	wc, ok := u.conns[id]
+	u.Unlock()
+	if ok {
+		return wc.WriteBinary(data)
+	}
+	return errors.New("connection not found")
+}
+
+func (u *Upgrader) Shutdown(ctx context.Context) error {
+	u.Lock()
+	for _, wc := range u.conns {
+		wc.Close()
+	}
+	u.Unlock()
+
+	// Code copied from net/http/server.go:Server.Shutdown
+	// Waiting for readLoops to finish.
+	const shutdownPollIntervalMax = 500 * time.Millisecond
+	pollIntervalBase := time.Millisecond
+	nextPollInterval := func() time.Duration {
+		// Add 10% jitter.
+		interval := pollIntervalBase + time.Duration(rand.Intn(int(pollIntervalBase/10)))
+		// Double and clamp for next time.
+		pollIntervalBase *= 2
+		if pollIntervalBase > shutdownPollIntervalMax {
+			pollIntervalBase = shutdownPollIntervalMax
+		}
+		return interval
+	}
+
+	timer := time.NewTimer(nextPollInterval())
+	defer timer.Stop()
+	for {
+		u.Lock()
+		if len(u.conns) == 0 {
+			u.Unlock()
+			return nil
+		}
+		u.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			timer.Reset(nextPollInterval())
+		}
+	}
+
 }
 
 func NewFromRequest(w http.ResponseWriter, r *http.Request) (*Conn, error) {

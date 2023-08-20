@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"sync"
 	"time"
 
 	"github.com/ianic/ws"
@@ -20,31 +20,43 @@ func main() {
 	log.Printf("starting websocket server at %s", address)
 
 	chat := NewChat()
-	server := NewServer(chat)
+	upgrader := ws.NewUpgrader(chat)
+	go func(updates chan Update) {
+		for u := range updates {
+			go func(u Update) {
+				for _, p := range u.Posts {
+					if err := upgrader.Send(u.ID, []byte(p)); err != nil {
+						slog.Error("upgrader.Send", "error", err)
+						return
+					}
+				}
+				chat.Ack(u.ID, u.Ack)
+			}(u)
+		}
+	}(chat.Updates)
 
 	fs := http.FileServer(http.Dir("./static"))
 	http.Handle("/", fs)
-	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		wc, err := ws.NewFromRequest(w, r)
-		if err != nil {
-			log.Printf("ws connect error %s", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		server.Connect(wc)
-	})
+	http.HandleFunc("/ws", upgrader.Upgrade)
 
 	srv := &http.Server{
 		Addr: address,
 	}
 	go func() {
 		wait()
-		httpShutdown(srv)
+		if err := httpShutdown(srv); err != nil {
+			slog.Error("http.Server shutdown", "error", err)
+		}
 	}()
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
-	server.Shutdown()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := upgrader.Shutdown(ctx); err != nil {
+		slog.Error("ws.Upgrader shutdown", "error", err)
+	}
+	chat.Close()
 }
 
 func wait() {
@@ -57,97 +69,6 @@ func httpShutdown(srv *http.Server) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return srv.Shutdown(ctx)
-}
-
-type Server struct {
-	chat        *Chat
-	connects    chan *ws.Conn
-	disconnects chan int
-	done        chan struct{}
-	wg          sync.WaitGroup
-}
-
-func NewServer(chat *Chat) *Server {
-	s := Server{
-		chat:        chat,
-		connects:    make(chan *ws.Conn),
-		disconnects: make(chan int),
-		done:        make(chan struct{}),
-	}
-	go s.loop()
-	return &s
-}
-
-func (s *Server) loop() {
-	conns := make(map[int]*ws.Conn)
-	nextID := 0
-	for {
-		select {
-		case u, ok := <-s.chat.Updates:
-			if !ok {
-				close(s.done)
-				return
-			}
-			if wc, ok := conns[u.ID]; ok {
-				s.wg.Add(1)
-				go s.update(wc, u)
-			}
-		case wc, ok := <-s.connects:
-			if !ok {
-				for _, wc := range conns {
-					wc.Close()
-				}
-				s.connects = nil // prevent further calls
-				break
-			}
-			nextID++
-			id := nextID
-			conns[id] = wc
-			s.wg.Add(1)
-			go s.readLoop(id, wc)
-		case id := <-s.disconnects:
-			delete(conns, id)
-		}
-	}
-}
-
-func (s *Server) update(wc *ws.Conn, u Update) {
-	defer s.wg.Done()
-
-	for _, t := range u.Posts {
-		if err := wc.WriteText([]byte(t)); err != nil {
-			return
-		}
-	}
-	s.chat.Ack(u.ID, u.Ack)
-}
-
-func (s *Server) Shutdown() {
-	close(s.connects)
-	s.wg.Wait()
-	s.chat.Close()
-	<-s.done
-}
-
-func (s *Server) Connect(wc *ws.Conn) {
-	s.connects <- wc
-}
-
-func (s *Server) readLoop(id int, wc *ws.Conn) {
-	defer s.wg.Done()
-
-	s.chat.Connect(id)
-	// log.Printf("connect %d", id)
-	for {
-		_, payload, err := wc.Read()
-		if err != nil {
-			break
-		}
-		s.chat.Post(id, string(payload))
-	}
-	s.chat.Disconnect(id)
-	s.disconnects <- id
-	// log.Printf("disconnect %d", id)
 }
 
 type Update struct {
@@ -180,6 +101,10 @@ func NewChat() *Chat {
 	go c.loop()
 	return &c
 }
+
+func (c *Chat) OnConnect(id int)           { c.Connect(id) }
+func (c *Chat) OnDisconnect(id int)        { c.Disconnect(id) }
+func (c *Chat) OnData(id int, data []byte) { c.Post(id, string(data)) }
 
 type Client struct {
 	pos    int
