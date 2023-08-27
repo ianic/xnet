@@ -25,7 +25,7 @@ type Conn struct {
 func NewConnection(nc net.Conn, br *bufio.Reader, permessageDeflate bool) Conn {
 	return Conn{
 		nc:                nc,
-		fr:                FrameReader{rd: br},
+		fr:                FrameReader{rd: newBufioBytesReader(br)},
 		permessageDeflate: permessageDeflate,
 	}
 }
@@ -131,11 +131,10 @@ func (c *Conn) verifyMessage(opcode OpCode, payload []byte) error {
 
 func (c *Conn) readFrame() (Frame, error) {
 	for {
-		c.nc.SetReadDeadline(fromTimeout(readTimeout))
 		frame, err := c.fr.Read()
 		if err != nil {
 			if errors.Is(err, os.ErrDeadlineExceeded) {
-				if err := c.onReadDeadline(); err != nil {
+				if err := c.onReadDeadlineExceeded(); err != nil {
 					return Frame{}, err
 				}
 				continue
@@ -149,7 +148,7 @@ func (c *Conn) readFrame() (Frame, error) {
 	}
 }
 
-func (c *Conn) onReadDeadline() error {
+func (c *Conn) onReadDeadlineExceeded() error {
 	return c.Write(Ping, nil)
 }
 
