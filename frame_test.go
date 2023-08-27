@@ -45,7 +45,7 @@ func TestNewFrame(t *testing.T) {
 		if c.expected.fin != f.fin ||
 			c.expected.opcode != f.opcode ||
 			string(c.expected.payload) != string(f.payload) {
-			t.Fatalf("case %d %v", i, f)
+			t.Fatalf("case %d %v != %v", i, f, c.expected)
 		}
 		if c.closeCode != f.closeCode() {
 			t.Fatalf("case %d unexpected close code %d", i, f.closeCode())

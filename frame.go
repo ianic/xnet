@@ -234,16 +234,13 @@ func (f Frame) isControl() bool {
 //   - (any other underlaying reader error)
 //
 // Note: ReadByte returns io.EOF when buffer emtpy, ReadFull returns ErrUnexpectedEOF!
-func newFrame(rd *bufio.Reader) (Frame, error) {
+func newFrame(rd BytesReader) (Frame, error) {
 	first, err := rd.ReadByte()
 	if err != nil {
 		return Frame{}, err
 	}
 	second, err := rd.ReadByte()
 	if err != nil {
-		if err == io.EOF {
-			return Frame{}, io.ErrUnexpectedEOF
-		}
 		return Frame{}, err
 	}
 
@@ -256,14 +253,14 @@ func newFrame(rd *bufio.Reader) (Frame, error) {
 	// decode payload len, read more bytes if needed
 	switch payloadLen {
 	case 126:
-		buf := make([]byte, 2)
-		if _, err := io.ReadFull(rd, buf); err != nil {
+		buf, err := rd.Read(2)
+		if err != nil {
 			return Frame{}, err
 		}
 		payloadLen = uint64(binary.BigEndian.Uint16(buf))
 	case 127:
-		buf := make([]byte, 8)
-		if _, err := io.ReadFull(rd, buf); err != nil {
+		buf, err := rd.Read(8)
+		if err != nil {
 			return Frame{}, err
 		}
 		payloadLen = binary.BigEndian.Uint64(buf)
@@ -272,8 +269,8 @@ func newFrame(rd *bufio.Reader) (Frame, error) {
 	// read masking key if present
 	var mask []byte
 	if masked {
-		mask = make([]byte, 4)
-		if _, err := io.ReadFull(rd, mask); err != nil {
+		mask, err = rd.Read(4)
+		if err != nil {
 			return Frame{}, err
 		}
 	}
@@ -281,11 +278,10 @@ func newFrame(rd *bufio.Reader) (Frame, error) {
 	// read payload
 	var payload []byte
 	if payloadLen > 0 {
-		payload = make([]byte, payloadLen)
-		if _, err := io.ReadFull(rd, payload); err != nil {
+		payload, err = rd.Read(int(payloadLen))
+		if err != nil {
 			return Frame{}, err
 		}
-
 		if masked {
 			maskUnmask(mask, payload)
 		}
@@ -303,11 +299,12 @@ func newFrame(rd *bufio.Reader) (Frame, error) {
 		return Frame{}, err
 	}
 
+	rd.FrameDone()
 	return frame, nil
 }
 
 func NewFrameFromBuffer(buf []byte) (Frame, error) {
-	rdr := bufio.NewReader(bytes.NewReader(buf))
+	rdr := newBufioBytesReader(bufio.NewReader(bytes.NewReader(buf)))
 	return newFrame(rdr)
 }
 
@@ -317,8 +314,68 @@ func maskUnmask(mask []byte, buf []byte) {
 	}
 }
 
+// BytesReader enables plugging different reader types.
+//
+// buifo.Reader backed by net.Conn is blocking type reader, when there is no
+// more data in buffer bufio will ask net for more, net will block on sycall
+// until read more data are available.
+//
+// When using async network io we have fixed bytes buffer, after parsing frames
+// from that buffer we need information how much of the buffer is processed, how
+// much bytes is needed for the next frame.
+//
+// BytesReader implementation is expected to return io.EOF if last frame is read
+// successfully and no more bytes are available. If we run out of bytes in the
+// middle of the frame parsing io.ErrUnexpectedEOF should be returned. So this
+// two cases are clearly distinguished by the type of the error. FrameReader
+// will call FrameDone after the full frame is read.
+type BytesReader interface {
+	ReadByte() (byte, error)
+	Read(size int) ([]byte, error)
+	FrameDone() // notification that full frame has bean read
+}
+
+// bufioBytesReader adapts bufio.Reader to the BytesReader interface
+type bufioBytesReader struct {
+	rd         *bufio.Reader
+	frameBytes int
+}
+
+func newBufioBytesReader(rd *bufio.Reader) *bufioBytesReader {
+	return &bufioBytesReader{rd: rd}
+}
+
+func (r *bufioBytesReader) ReadByte() (byte, error) {
+	b, err := r.rd.ReadByte()
+	if err != nil {
+		if err == io.EOF && r.frameBytes > 0 {
+			return 0, io.ErrUnexpectedEOF
+		}
+		return 0, io.EOF
+	}
+	r.frameBytes += 1
+	return b, nil
+}
+
+func (r *bufioBytesReader) Read(size int) ([]byte, error) {
+	buf := make([]byte, size)
+	n, err := io.ReadFull(r.rd, buf)
+	if err != nil {
+		if err == io.ErrUnexpectedEOF && r.frameBytes == 0 && n == 0 {
+			return nil, io.EOF
+		}
+		return nil, err
+	}
+	r.frameBytes += size
+	return buf, nil
+}
+
+func (r *bufioBytesReader) FrameDone() {
+	r.frameBytes = 0
+}
+
 type FrameReader struct {
-	rd *bufio.Reader
+	rd BytesReader
 }
 
 func (r FrameReader) Read() (Frame, error) {
@@ -326,7 +383,7 @@ func (r FrameReader) Read() (Frame, error) {
 }
 
 func NewFrameReader(br *bufio.Reader) FrameReader {
-	return FrameReader{rd: br}
+	return FrameReader{rd: newBufioBytesReader(br)}
 }
 
 func NewFrameReaderFromBuffer(buf []byte) FrameReader {
