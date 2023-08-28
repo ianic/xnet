@@ -2,6 +2,7 @@ package ws
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/base64"
@@ -54,6 +55,10 @@ func (hs *Handshake) Response() string {
 	}
 	b.WriteString(crlf)
 	return fmt.Sprintf(b.String(), secAccept(hs.key))
+}
+
+func NewHandshakeFromBuffer(buf []byte) (Handshake, error) {
+	return NewHandshake(bufio.NewReader(bytes.NewBuffer(buf)))
 }
 
 func NewHandshake(reader *bufio.Reader) (Handshake, error) {
@@ -152,4 +157,12 @@ func secAccept(key string) string {
 	io.WriteString(h, key)
 	io.WriteString(h, WsMagicKey)
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))
+}
+
+func (h *Handshake) NewAsyncConn(stream Stream, handler Handler) *AsyncConn {
+	return &AsyncConn{
+		stream:            stream,
+		handler:           handler,
+		permessageDeflate: h.extension.permessageDeflate,
+	}
 }

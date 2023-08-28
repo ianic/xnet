@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -33,8 +34,9 @@ func run(port int) error {
 		return err
 	}
 	defer lp.Close()
-	srv := server{}
-	ln, err := aio.NewListener(lp, port, &srv)
+	ln, err := aio.NewTcpListener(lp, port, func(fd int, senderCloser aio.SenderCloser) aio.Conn {
+		return &conn{fd: fd, sender: senderCloser}
+	})
 	if err != nil {
 		return err
 	}
@@ -47,34 +49,32 @@ func run(port int) error {
 	if err := lp.RunUntilDone(); err != nil {
 		slog.Error("run", "error", err)
 	}
-
+	if cc := ln.ConnCount(); cc != 0 {
+		panic(fmt.Sprintf("listner conn count should be 0 actual %d", cc))
+	}
 	return nil
 }
 
-type server struct {
-	sender aio.Sender
+type Sender interface {
+	Send(data []byte) error
 }
 
-func (s *server) OnStart(writer aio.Sender) {
-	s.sender = writer
+type conn struct {
+	fd     int
+	sender Sender
 }
 
-func (s *server) OnConnect(fd int) {
-	slog.Debug("connect", "fd", fd)
-}
-
-func (s *server) OnDisconnect(fd int, err error) {
-	slog.Debug("disconnect", "fd", fd)
-}
-
-func (s *server) OnRecv(fd int, data []byte) {
-	slog.Debug("received", "fd", fd, "len", len(data))
+func (c *conn) Received(data []byte) {
+	slog.Debug("received", "fd", c.fd, "len", len(data))
 
 	dst := make([]byte, len(data))
 	copy(dst, data)
-	s.sender.Send(fd, dst)
+	c.sender.Send(dst)
 }
 
-func (s *server) OnSend(fd int, err error) {
-	slog.Debug("sent", "fd", fd)
+func (c *conn) Closed(error) {
+	slog.Debug("closed", "fd", c.fd)
+}
+func (c *conn) Sent(error) {
+	slog.Debug("sent", "fd", c.fd)
 }
