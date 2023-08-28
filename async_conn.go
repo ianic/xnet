@@ -157,6 +157,7 @@ func toOwnCopy(payload []byte) []byte {
 }
 
 func (c *AsyncConn) send(opcode OpCode, payload []byte) {
+	// TODO support buffers send into upstream aio
 	buffers, err := encodeFrame(opcode, payload, c.permessageDeflate)
 	if err != nil {
 		// TODO
