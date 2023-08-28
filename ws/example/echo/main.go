@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/ianic/ws"
+	"github.com/ianic/xnet/ws"
 )
 
 // InteruptContext returns context which will be closed on application interupt

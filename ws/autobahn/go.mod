@@ -1,4 +1,4 @@
-module github.com/ianic/ws/autobahn
+module github.com/ianic/xnet/ws/autobahn
 
 go 1.21.0
 
@@ -35,8 +35,8 @@ require (
 	gopkg.in/yaml.v2 v2.3.0 // indirect
 )
 
-require github.com/ianic/ws v0.0.0
+require github.com/ianic/xnet/ws v0.0.0
 
 replace (
-	github.com/ianic/ws => ../
+	github.com/ianic/xnet/ws => ../
 )

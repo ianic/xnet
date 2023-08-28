@@ -1,4 +1,4 @@
-module github.com/ianic/ws
+module github.com/ianic/xnet/ws
 
 go 1.21.0
 

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianic/ws"
+	"github.com/ianic/xnet/ws"
 	"github.com/ory/dockertest/v3"
 	"golang.org/x/sync/errgroup"
 )

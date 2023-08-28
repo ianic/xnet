@@ -11,7 +11,7 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/ianic/ws"
+	"github.com/ianic/xnet/ws"
 )
 
 func main() {
