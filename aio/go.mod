@@ -1,4 +1,4 @@
-module github.com/ianic/iol
+module github.com/ianic/xnet/aio
 
 go 1.21.0
 
@@ -9,5 +9,5 @@ require (
 )
 
 replace (
-	github.com/pawelgaczynski/giouring => ../giouring
+	github.com/pawelgaczynski/giouring => ../../giouring
 )

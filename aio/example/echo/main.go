@@ -4,8 +4,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/ianic/iol"
-	"github.com/ianic/iol/signal"
+	"github.com/ianic/xnet/aio"
+	"github.com/ianic/xnet/aio/signal"
 )
 
 func main() {
@@ -24,7 +24,7 @@ func main() {
 
 func run(port int) error {
 	slog.Debug("starting server", "port", port)
-	lp, err := iol.New(iol.Options{
+	lp, err := aio.New(aio.Options{
 		RingEntries:      128,
 		RecvBuffersCount: 256,
 		RecvBufferLen:    1024,
@@ -34,7 +34,7 @@ func run(port int) error {
 	}
 	defer lp.Close()
 	srv := server{}
-	ln, err := iol.NewListener(lp, port, &srv)
+	ln, err := aio.NewListener(lp, port, &srv)
 	if err != nil {
 		return err
 	}
@@ -52,10 +52,10 @@ func run(port int) error {
 }
 
 type server struct {
-	sender iol.Sender
+	sender aio.Sender
 }
 
-func (s *server) OnStart(writer iol.Sender) {
+func (s *server) OnStart(writer aio.Sender) {
 	s.sender = writer
 }
 
