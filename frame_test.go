@@ -1,6 +1,8 @@
 package ws
 
 import (
+	"bufio"
+	"bytes"
 	"io"
 	"testing"
 )
@@ -25,6 +27,22 @@ var (
 )
 
 func TestNewFrame(t *testing.T) {
+	t.Run("with buffered reader", func(t *testing.T) {
+		testNewFrame(t, func(buf []byte) (Frame, error) {
+			rdr := newBufioBytesReader(bufio.NewReader(bytes.NewReader(buf)))
+			return newFrame(rdr)
+		})
+	})
+
+	t.Run("with bytes reader", func(t *testing.T) {
+		testNewFrame(t, func(buf []byte) (Frame, error) {
+			return newFrame(&bufferBytesReader{buf: buf})
+		})
+	})
+}
+
+func testNewFrame(t *testing.T, newFrame func([]byte) (Frame, error)) {
+
 	cases := []struct {
 		data      []byte
 		expected  Frame
@@ -37,25 +55,41 @@ func TestNewFrame(t *testing.T) {
 		{closeFrame, Frame{fin: true, opcode: Close, payload: []byte{0x03, 0xe9}}, 1001},
 	}
 
-	for i, c := range cases {
-		f, err := NewFrameFromBuffer(c.data)
+	assert := func(expectedFrame Frame, expectedCloseCode uint16, actualFrame Frame, caseNo int) {
+		if expectedFrame.fin != actualFrame.fin ||
+			expectedFrame.opcode != actualFrame.opcode ||
+			string(expectedFrame.payload) != string(actualFrame.payload) {
+			t.Fatalf("case %d %v != %v", caseNo, actualFrame, expectedFrame)
+		}
+		if expectedCloseCode != actualFrame.closeCode() {
+			t.Fatalf("case %d unexpected close code %d", caseNo, actualFrame.closeCode())
+		}
+	}
+
+	for caseNo, c := range cases {
+		actualFrame, err := newFrame(c.data)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if c.expected.fin != f.fin ||
-			c.expected.opcode != f.opcode ||
-			string(c.expected.payload) != string(f.payload) {
-			t.Fatalf("case %d %v != %v", i, f, c.expected)
-		}
-		if c.closeCode != f.closeCode() {
-			t.Fatalf("case %d unexpected close code %d", i, f.closeCode())
-		}
+		assert(c.expected, c.closeCode, actualFrame, caseNo)
 	}
 }
 
 func TestParseFragmentedMessage(t *testing.T) {
-	rdr := NewFrameReaderFromBuffer(fragmentedMessage)
+	t.Run("with buffered reader", func(t *testing.T) {
+		testParseFragmentedMessage(t, func(buf []byte) FrameReader {
+			br := bufio.NewReader(bytes.NewReader(fragmentedMessage))
+			return NewFrameReader(br)
+		})
+	})
 
+	t.Run("with bytes reader", func(t *testing.T) {
+		testParseFragmentedMessage(t, NewFrameReaderFromBuffer)
+	})
+}
+
+func testParseFragmentedMessage(t *testing.T, frameFactory func([]byte) FrameReader) {
+	rdr := frameFactory(fragmentedMessage)
 	frags := []struct {
 		opcode OpCode
 		fin    bool
@@ -89,5 +123,36 @@ func TestParseFragmentedMessage(t *testing.T) {
 	_, err := rdr.Read()
 	if err != io.EOF {
 		t.Fatal(err)
+	}
+}
+
+func TestReadMore(t *testing.T) {
+	_, err := newFrame(&bufferBytesReader{buf: maskedHelloFrame[:2]})
+	rm := err.(*ErrReadMore)
+	if rm.Bytes != 4 {
+		t.Fatalf("expect to read 4 bytes of mask")
+	}
+
+	_, err = newFrame(&bufferBytesReader{buf: maskedHelloFrame[:6]})
+	rm = err.(*ErrReadMore)
+	if rm.Bytes != 5 {
+		t.Fatalf("expect to read 5 bytes of payload")
+	}
+
+	// fragmentedMessage split at fragment2
+	// 3 bytes of fragment1, 2 bytes of ping + 2 bytes of fragment2
+	fr := NewFrameReaderFromBuffer(fragmentedMessage[:7])
+	_, err = fr.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fr.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fr.Read()
+	rm = err.(*ErrReadMore)
+	if rm.Bytes != 3 {
+		t.Fatalf("expect to read 3 bytes of payload")
 	}
 }

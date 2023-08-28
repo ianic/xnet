@@ -23,9 +23,9 @@ package ws
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"unicode/utf8"
@@ -303,11 +303,6 @@ func newFrame(rd BytesReader) (Frame, error) {
 	return frame, nil
 }
 
-func NewFrameFromBuffer(buf []byte) (Frame, error) {
-	rdr := newBufioBytesReader(bufio.NewReader(bytes.NewReader(buf)))
-	return newFrame(rdr)
-}
-
 func maskUnmask(mask []byte, buf []byte) {
 	for i, c := range buf {
 		buf[i] = c ^ mask[i%4]
@@ -374,6 +369,56 @@ func (r *bufioBytesReader) FrameDone() {
 	r.frameBytes = 0
 }
 
+type bufferBytesReader struct {
+	buf  []byte
+	head int
+	tail int
+}
+
+func (r *bufferBytesReader) ReadByte() (byte, error) {
+	if r.head < len(r.buf) {
+		b := r.buf[r.head]
+		r.head++
+		return b, nil
+	}
+	if r.head == r.tail {
+		return 0, io.EOF
+	}
+	return 0, &ErrReadMore{Bytes: 1}
+}
+
+func (r *bufferBytesReader) Read(size int) ([]byte, error) {
+	if r.head+size <= len(r.buf) {
+		b := r.buf[r.head : r.head+size]
+		r.head += size
+		return b, nil
+	}
+	if r.head == r.tail {
+		return nil, io.EOF
+	}
+	return nil, &ErrReadMore{Bytes: r.head + size - len(r.buf)}
+}
+
+func (r *bufferBytesReader) pending() []byte {
+	return r.buf[r.tail:]
+}
+
+func newBufferBytesReader(buf []byte) *bufferBytesReader {
+	return &bufferBytesReader{buf: buf}
+}
+
+type ErrReadMore struct {
+	Bytes int
+}
+
+func (e *ErrReadMore) Error() string {
+	return fmt.Sprintf("read %d bytes more", e.Bytes)
+}
+
+func (r *bufferBytesReader) FrameDone() {
+	r.tail = r.head
+}
+
 type FrameReader struct {
 	rd BytesReader
 }
@@ -387,8 +432,7 @@ func NewFrameReader(br *bufio.Reader) FrameReader {
 }
 
 func NewFrameReaderFromBuffer(buf []byte) FrameReader {
-	br := bufio.NewReader(bytes.NewReader(buf))
-	return NewFrameReader(br)
+	return FrameReader{rd: newBufferBytesReader(buf)}
 }
 
 // TODO masked version

@@ -82,7 +82,7 @@ func (c *Conn) read() (OpCode, []byte, error) {
 			}
 			continue
 		}
-		if err := c.verifyFrame(frame, prevFrameFragment); err != nil {
+		if err := verifyFrame(frame, prevFrameFragment, c.permessageDeflate); err != nil {
 			return None, nil, err
 		}
 
@@ -101,7 +101,7 @@ func (c *Conn) read() (OpCode, []byte, error) {
 					return None, nil, err
 				}
 			}
-			if err := c.verifyMessage(opcode, payload); err != nil {
+			if err := verifyMessage(opcode, payload); err != nil {
 				return None, nil, err
 			}
 			return opcode, payload, nil
@@ -111,18 +111,18 @@ func (c *Conn) read() (OpCode, []byte, error) {
 	}
 }
 
-func (c *Conn) verifyFrame(frame Frame, prevFragment Fragment) error {
+func verifyFrame(frame Frame, prevFragment Fragment, permessageDeflate bool) error {
 	if err := frame.verifyContinuation(prevFragment); err != nil {
 		return err
 	}
-	if err := frame.verifyRsvBits(c.permessageDeflate); err != nil {
+	if err := frame.verifyRsvBits(permessageDeflate); err != nil {
 		return err
 	}
 	return nil
 }
 
 // verify that text message has valid utf8 payload
-func (c *Conn) verifyMessage(opcode OpCode, payload []byte) error {
+func verifyMessage(opcode OpCode, payload []byte) error {
 	if opcode == Text && !utf8.Valid(payload) {
 		return ErrInvalidUtf8Payload
 	}
@@ -180,16 +180,24 @@ func (c *Conn) WriteText(payload []byte) error {
 // Write prepares message frame, compresses payload if deflate is enabled and
 // writes that frame to the underlying net.Conn.
 func (c *Conn) Write(opcode OpCode, payload []byte) error {
+	buffers, err := encodeFrame(opcode, payload, c.permessageDeflate)
+	if err != nil {
+		return err
+	}
+	return c.write(buffers)
+}
+
+func encodeFrame(opcode OpCode, payload []byte, permessageDeflate bool) (net.Buffers, error) {
 	frame := Frame{fin: true, opcode: opcode, payload: payload}
-	if (opcode == Text || opcode == Binary) && c.permessageDeflate {
+	if (opcode == Text || opcode == Binary) && permessageDeflate {
 		payload, err := Compress(payload)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		frame.deflated = true
 		frame.payload = payload
 	}
-	return c.write(frame.encode())
+	return frame.encode(), nil
 }
 
 // buffers.Write on [unix] systems will call [Writev]. Writev locks at enter so
