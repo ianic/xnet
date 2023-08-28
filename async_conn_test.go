@@ -48,19 +48,19 @@ func TestAsyncConnParseMessage(t *testing.T) {
 	if len(h.received) != 1 || s.closeCalls != 0 {
 		t.Fatalf("unexpected communication %d %d %s", len(h.received), s.closeCalls, s.closeError)
 	}
-	if len(c.payload) != 0 ||
-		c.opcode != None {
+	if len(c.ms.payload) != 0 ||
+		c.ms.opcode != None {
 		t.Fatal("unexpected message state")
 	}
-	if len(c.pending) != 7 ||
-		c.recvMore != 4 {
-		t.Fatalf("unexpected parsing state %d %d", len(c.pending), c.recvMore)
+	if len(c.fs.pending) != 7 ||
+		c.fs.recvMore != 4 {
+		t.Fatalf("unexpected parsing state %d %d", len(c.fs.pending), c.fs.recvMore)
 	}
 	// push some more
 	c.Received(maskedHelloFrame[7:9])
-	if len(c.pending) != 9 ||
-		c.recvMore != 2 {
-		t.Fatalf("unexpected parsing state %d %d", len(c.pending), c.recvMore)
+	if len(c.fs.pending) != 9 ||
+		c.fs.recvMore != 2 {
+		t.Fatalf("unexpected parsing state %d %d", len(c.fs.pending), c.fs.recvMore)
 	}
 	// push the rest
 	c.Received(maskedHelloFrame[9:])
@@ -76,36 +76,36 @@ func TestAsyncConnParseFragmentedMessage(t *testing.T) {
 	c := AsyncConn{stream: &s, handler: &h}
 
 	c.Received(fragment1[:2])
-	if len(c.pending) != 2 {
-		t.Fatalf("unexpected pending len %d", len(c.pending))
+	if len(c.fs.pending) != 2 {
+		t.Fatalf("unexpected pending len %d", len(c.fs.pending))
 	}
 	c.Received(fragment1[2:])
-	if len(c.payload) != 1 ||
-		c.opcode != Text ||
-		c.prevFrameFragment != fragFirst {
+	if len(c.ms.payload) != 1 ||
+		c.ms.opcode != Text ||
+		c.ms.prevFrameFragment != fragFirst {
 		t.Fatal()
 	}
 	c.Received(pingFrame[:1])
-	if len(c.pending) != 1 {
-		t.Fatalf("unexpected pending len %d", len(c.pending))
+	if len(c.fs.pending) != 1 {
+		t.Fatalf("unexpected pending len %d", len(c.fs.pending))
 	}
 	c.Received(pingFrame[1:])
 	c.Received(fragment2[:3])
-	if len(c.pending) != 3 {
-		t.Fatalf("unexpected pending len %d", len(c.pending))
+	if len(c.fs.pending) != 3 {
+		t.Fatalf("unexpected pending len %d", len(c.fs.pending))
 	}
 	c.Received(fragment2[3:])
-	if len(c.payload) != 4 {
-		t.Fatalf("unexpected pending len %d", len(c.pending))
+	if len(c.ms.payload) != 4 {
+		t.Fatalf("unexpected pending len %d", len(c.fs.pending))
 	}
 	c.Received(pongFrame[:1])
-	if len(c.pending) != 1 {
-		t.Fatalf("unexpected pending len %d", len(c.pending))
+	if len(c.fs.pending) != 1 {
+		t.Fatalf("unexpected pending len %d", len(c.fs.pending))
 	}
 	c.Received(pongFrame[1:])
 	c.Received(fragment3[:1])
-	if len(c.pending) != 1 {
-		t.Fatalf("unexpected pending len %d", len(c.pending))
+	if len(c.fs.pending) != 1 {
+		t.Fatalf("unexpected pending len %d", len(c.fs.pending))
 	}
 	c.Received(fragment3[1:])
 
@@ -118,4 +118,3 @@ func TestAsyncConnParseFragmentedMessage(t *testing.T) {
 		t.Fatalf("unexpected downstream send %d", len(s.sent))
 	}
 }
-1

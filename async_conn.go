@@ -17,49 +17,73 @@ type Handler interface {
 	Disconnected(error)
 }
 
+// AsyncConn
+// Makes copy of the payload before passing it downstream
 type AsyncConn struct {
-	stream  Stream
-	handler Handler
-	// connection options
-	permessageDeflate bool
-	// fragmented message state
+	stream            Stream
+	handler           Handler
+	permessageDeflate bool         // connection option
+	ms                messageState // fragmented message state
+	fs                frameState   // partial frame parsing state
+}
+
+type messageState struct {
 	payload           []byte
 	opcode            OpCode
 	prevFrameFragment Fragment
 	compressed        bool
-	// partial frame parsing state
-	pending  []byte
-	recvMore int
 }
 
-func (c *AsyncConn) resetFrameParsingState() {
-	c.pending = nil
-	c.recvMore = 0
+func (ms *messageState) reset() {
+	ms.payload = nil
+	ms.opcode = None
+	ms.prevFrameFragment = fragSingle
+	ms.compressed = false
 }
 
-func (c *AsyncConn) resetFragmentedMessageState() {
-	c.payload = nil
-	c.opcode = None
-	c.prevFrameFragment = fragSingle
-	c.compressed = false
+func (ms *messageState) add(frame Frame) {
+	if frame.first() {
+		ms.compressed = frame.rsv1()
+		ms.opcode = frame.opcode
+	}
+	// payload is always own copy
+	ms.payload = append(ms.payload, frame.payload...)
+	ms.prevFrameFragment = frame.fragment()
+}
+
+type frameState struct {
+	pending  []byte // unprocessed part of the received buffer
+	recvMore int    // how much bytes is needed for frame parsing to advance
+}
+
+func (fs *frameState) received(buf []byte) []byte {
+	if len(buf) < fs.recvMore {
+		fs.pending = append(fs.pending, buf...)
+		fs.recvMore -= len(buf)
+		return nil // nothing to process waiting for more
+	}
+	if len(fs.pending) > 0 {
+		fs.recvMore = 0
+		return append(fs.pending, buf...) // process pending + buf
+	}
+	return buf // nothing pending process buf
+}
+
+func (fs *frameState) unprocessed(buf []byte, recvMore int) {
+	fs.pending = append(fs.pending, buf...)
+	fs.recvMore = recvMore
+}
+
+func (fs *frameState) reset() {
+	fs.pending = nil
+	fs.recvMore = 0
 }
 
 func (c *AsyncConn) Received(buf []byte) {
-	if len(buf) < c.recvMore {
-		c.pending = append(c.pending, buf...)
-		c.recvMore -= len(buf)
-		return
-	}
-
-	bbuf := buf
-	if len(c.pending) > 0 {
-		bbuf = append(c.pending, buf...)
-	}
-	// TODO informacija korisiti li vlatiti kopiju buffera ili je shared s nivoom prije
-	// ili jednostavno od ove tocke dalje osiguraj da se vrati buffer u io_uring
-	// da drugi vise ne moraju misliti o tome, da ne propagiramo tu informaciju dalje
-	if err := c.readFrames(bbuf); err != nil {
-		c.stream.Close(err)
+	if b := c.fs.received(buf); b != nil {
+		if err := c.readFrames(b); err != nil {
+			c.stream.Close(err)
+		}
 	}
 }
 
@@ -72,66 +96,64 @@ func (c *AsyncConn) readFrames(buf []byte) error {
 		if err != nil {
 			if err == io.EOF {
 				// reached end of the buffer cleanly
-				// everything in buffer consumed
+				// everything in buffer processed
 				return nil
 			}
 			var erm *ErrReadMore
 			if errors.As(err, &erm) {
-				c.recvMore = erm.Bytes
-				if p := bbr.pending(); len(p) > 0 {
-					c.pending = append(c.pending, p...)
-				}
+				c.fs.unprocessed(bbr.pending(), erm.Bytes)
 				return nil
 			}
 			return err
 		}
-		c.resetFrameParsingState()
+		c.fs.reset()
 		if frame.isControl() {
 			c.handleControl(frame)
 			continue
 		}
-		if err := verifyFrame(frame, c.prevFrameFragment, c.permessageDeflate); err != nil {
+		if err := verifyFrame(frame, c.ms.prevFrameFragment, c.permessageDeflate); err != nil {
 			return err
 		}
-
-		if frame.first() {
-			c.compressed = frame.rsv1()
-			c.opcode = frame.opcode
-			c.payload = frame.payload
-		} else {
-			c.payload = append(c.payload, frame.payload...)
-		}
+		c.ms.add(frame)
 
 		if frame.fin {
-			if c.compressed {
-				c.payload, err = Decompress(c.payload)
+			payload := c.ms.payload
+			if c.ms.compressed {
+				payload, err = Decompress(payload)
 				if err != nil {
 					return err
 				}
 			}
-			if err := verifyMessage(c.opcode, c.payload); err != nil {
+			if err := verifyMessage(c.ms.opcode, payload); err != nil {
 				return err
 			}
-			c.handler.Received(c.payload)
-			c.resetFragmentedMessageState()
-			continue
+			c.handler.Received(payload) // send message downstream
+			c.ms.reset()
 		}
-		c.prevFrameFragment = frame.fragment()
 	}
 }
 
 func (c *AsyncConn) handleControl(frame Frame) {
 	switch frame.opcode {
 	case Ping:
-		c.send(Pong, frame.payload)
+		c.send(Pong, toOwnCopy(frame.payload))
 	case Pong:
 		// nothing to do on pong
 		return
 	case Close:
-		c.send(Close, frame.payload)
+		c.send(Close, toOwnCopy(frame.payload))
 	default:
 		panic("not a control frame")
 	}
+}
+
+func toOwnCopy(payload []byte) []byte {
+	if len(payload) == 0 {
+		return nil
+	}
+	dst := make([]byte, len(payload))
+	copy(dst, payload)
+	return dst
 }
 
 func (c *AsyncConn) send(opcode OpCode, payload []byte) {
