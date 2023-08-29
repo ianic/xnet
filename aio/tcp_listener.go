@@ -3,6 +3,8 @@ package aio
 import (
 	"log/slog"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 type NewConn func(int, *TcpConn) Upstream
@@ -72,4 +74,27 @@ func (l *TcpListener) ConnCount() int {
 
 func (l *TcpListener) remove(fd int) {
 	delete(l.conns, fd)
+}
+
+func bind(addr *syscall.SockaddrInet4) (int, error) {
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		return 0, err
+	}
+	if err := syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, unix.SO_REUSEADDR, 1); err != nil {
+		return 0, err
+	}
+	if err := syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, unix.SO_REUSEPORT, 1); err != nil {
+		return 0, err
+	}
+	if err := syscall.Bind(fd, addr); err != nil {
+		return 0, err
+	}
+	if err := syscall.SetNonblock(fd, false); err != nil {
+		return 0, err
+	}
+	if err := syscall.Listen(fd, 128); err != nil {
+		return 0, err
+	}
+	return fd, nil
 }
