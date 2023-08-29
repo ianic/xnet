@@ -34,8 +34,8 @@ func run(port int) error {
 		return err
 	}
 	defer lp.Close()
-	ln, err := aio.NewTcpListener(lp, port, func(fd int, senderCloser aio.SenderCloser) aio.Conn {
-		return &conn{fd: fd, sender: senderCloser}
+	ln, err := aio.NewTcpListener(lp, port, func(fd int, tc *aio.TcpConn) aio.Conn {
+		return &conn{fd: fd, sender: tc}
 	})
 	if err != nil {
 		return err

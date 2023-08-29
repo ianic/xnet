@@ -13,7 +13,8 @@ func (h *testHandler) Received(data []byte) {
 	h.received = append(h.received, data)
 }
 
-func (h *testHandler) Disconnected(error) {}
+func (h *testHandler) Closed(error) {}
+func (h *testHandler) Sent(error)   {}
 
 type testStream struct {
 	sent       [][]byte
@@ -26,8 +27,7 @@ func (s *testStream) Send(data []byte) error {
 	return nil
 }
 
-func (s *testStream) Close(err error) {
-	s.closeError = err
+func (s *testStream) Close() {
 	s.closeCalls++
 }
 
@@ -35,7 +35,7 @@ func TestAsyncConnParseMessage(t *testing.T) {
 	h := testHandler{}
 	s := testStream{}
 
-	c := AsyncConn{stream: &s, handler: &h}
+	c := AsyncConn{tc: &s, up: &h}
 
 	// push hello frame
 	c.Received(helloFrame)
@@ -73,7 +73,7 @@ func TestAsyncConnParseMessage(t *testing.T) {
 func TestAsyncConnParseFragmentedMessage(t *testing.T) {
 	h := testHandler{}
 	s := testStream{}
-	c := AsyncConn{stream: &s, handler: &h}
+	c := AsyncConn{tc: &s, up: &h}
 
 	c.Received(fragment1[:2])
 	if len(c.fs.pending) != 2 {

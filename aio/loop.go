@@ -312,9 +312,9 @@ func (c *callbacks) set(sqe *giouring.SubmissionQueueEntry, cb completionCallbac
 }
 
 func (c *callbacks) get(cqe *giouring.CompletionQueueEvent) completionCallback {
-	isMultiShot := (cqe.Flags & giouring.CQEFMore) > 0
+	ms := isMultiShot(cqe.Flags)
 	cb := c.m[cqe.UserData]
-	if !isMultiShot {
+	if !ms {
 		delete(c.m, cqe.UserData)
 	}
 	return cb
@@ -325,3 +325,7 @@ func (c *callbacks) count() int {
 }
 
 // #endregion
+
+func isMultiShot(flags uint32) bool {
+	return flags&giouring.CQEFMore > 0
+}

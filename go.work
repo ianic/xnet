@@ -2,6 +2,7 @@ go 1.21.0
 
 use (
 	./aio
+	./example/ws_chat
 	./ws
 	./ws/autobahn
 )

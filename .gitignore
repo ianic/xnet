@@ -4,5 +4,5 @@ ws/example/chat/chat
 ws/example/echo/echo
 aio/example/echo/echo
 aio/example/ws_chat/ws_chat
+example/ws_chat/ws_chat
 aio/tmp/*
-

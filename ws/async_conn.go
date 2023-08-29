@@ -3,25 +3,27 @@ package ws
 import (
 	"errors"
 	"io"
+	"log/slog"
 )
 
-// upstream stdin
-type Stream interface {
+// lower layer, tcp connection
+type AsyncTcpConn interface {
 	Send([]byte) error
-	Close(error)
+	Close()
 }
 
-// downstream stdout
-type Handler interface {
+// upper layer
+type Upstream interface {
 	Received([]byte)
-	Disconnected(error)
+	Closed(error)
+	Sent(error)
 }
 
 // AsyncConn
 // Makes copy of the payload before passing it downstream
 type AsyncConn struct {
-	stream            Stream
-	handler           Handler
+	tc                AsyncTcpConn
+	up                Upstream
 	permessageDeflate bool         // connection option
 	ms                messageState // fragmented message state
 	fs                frameState   // partial frame parsing state
@@ -82,7 +84,8 @@ func (fs *frameState) reset() {
 func (c *AsyncConn) Received(buf []byte) {
 	if b := c.fs.received(buf); b != nil {
 		if err := c.readFrames(b); err != nil {
-			c.stream.Close(err)
+			slog.Debug("read frame failed", slog.String("error", err.Error()))
+			c.tc.Close()
 		}
 	}
 }
@@ -127,7 +130,7 @@ func (c *AsyncConn) readFrames(buf []byte) error {
 			if err := verifyMessage(c.ms.opcode, payload); err != nil {
 				return err
 			}
-			c.handler.Received(payload) // send message downstream
+			c.up.Received(payload) // send message downstream
 			c.ms.reset()
 		}
 	}
@@ -173,9 +176,13 @@ func (c *AsyncConn) send(opcode OpCode, payload []byte) {
 		copy(buf[nn:], b)
 		nn += len(b)
 	}
-	c.stream.Send(buf)
+	c.tc.Send(buf)
 }
 
-func (c *AsyncConn) Disconnected(err error) {
+func (c *AsyncConn) Closed(err error) {
+	c.up.Closed(err)
+}
 
+func (c *AsyncConn) Sent(err error) {
+	c.up.Sent(err)
 }
