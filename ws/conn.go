@@ -221,7 +221,7 @@ func (c *Conn) Close() error {
 	return c.nc.Close()
 }
 
-var resetDeadline = time.Time{}
+// var resetDeadline = time.Time{}
 
 func fromTimeout(dur time.Duration) time.Time {
 	return time.Now().Add(dur)

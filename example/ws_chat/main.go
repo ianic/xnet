@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
-	"time"
 
 	"github.com/ianic/xnet/aio"
 	"github.com/ianic/xnet/aio/signal"
@@ -18,30 +17,33 @@ func main() {
 }
 
 func run(port int) error {
-	// start loop
+	// create loop
 	loop, err := aio.New(aio.DefaultOptions)
 	if err != nil {
 		return err
 	}
 	defer loop.Close()
 
-	// start listener
-	lsn, err := aio.NewTcpListener(loop, port, func(fd int, tc *aio.TcpConn) aio.Conn {
-		return &handshake{fd: fd, tcpConn: tc}
+	chat := newChat()
+	upgrade := func(fd int, tc *aio.TcpConn, wc *ws.AsyncConn) {
+		cli := chat.newClient(fd, wc)
+		wc.SetUpstream(cli)
+		tc.SetUpstream(wc) // replaces handshake
+	}
+
+	// start tcp listener
+	lsn, err := aio.NewTcpListener(loop, port, func(fd int, tc *aio.TcpConn) aio.Upstream {
+		// start handshake for accepted connection
+		return &handshake{
+			fd:      fd,
+			tcpConn: tc,
+			upgrade: upgrade,
+		}
 	})
 	if err != nil {
 		return err
 	}
-
-	// run loop until interrupt
-	ctx := signal.InteruptContext()
-	if err := loop.Run(ctx, time.Second); err != nil {
-		slog.Error("run", "error", err)
-	}
-	// stop listener
-	lsn.Close()
-	// run loop until all connections closes
-	if err := loop.RunUntilDone(); err != nil {
+	if err := loop.Run(signal.InteruptContext(), func() { lsn.Close() }); err != nil {
 		slog.Error("run", "error", err)
 	}
 
@@ -51,33 +53,88 @@ func run(port int) error {
 type handshake struct {
 	fd      int
 	tcpConn *aio.TcpConn
-	hs      ws.Handshake
+	upgrade func(int, *aio.TcpConn, *ws.AsyncConn)
 }
 
 func (h *handshake) Received(data []byte) {
-	var err error
-	h.hs, err = ws.NewHandshakeFromBuffer(data)
+	hs, err := ws.NewHandshakeFromBuffer(data)
 	if err != nil {
 		slog.Info("handshake failed", slog.String("error", err.Error()))
 		h.tcpConn.Close()
 		return
 	}
-	h.tcpConn.Send([]byte(h.hs.Response()))
+	wc := hs.NewAsyncConn(h.tcpConn)
+	h.upgrade(h.fd, h.tcpConn, wc)
+	h.tcpConn.Send([]byte(hs.Response()))
 }
 func (h *handshake) Closed(error) {}
-func (h *handshake) Sent(error) {
-	// link websocket connection as upper layer of TcpConn instead of handshake
-	u := &upstream{}
-	ac := h.hs.NewAsyncConn(h.tcpConn, u)
-	h.tcpConn.SetConn(ac)
+func (h *handshake) Sent()        {}
+
+type conn interface {
+	Send([]byte)
+	Close()
 }
 
-type upstream struct{}
+type client struct {
+	fd         int
+	conn       conn
+	chat       *chat
+	pos        int
+	sendActive bool
+}
 
-func (u *upstream) Received(data []byte) {
+func (c *client) Received(data []byte) {
+	c.chat.post(data)
 	fmt.Printf("%s", data)
 }
-func (u *upstream) Closed(error) {
-	fmt.Printf("closed\n")
+func (c *client) Closed(err error) {
+	c.chat.remove(c.fd)
+	fmt.Printf("removed %d, close reason %s\n", c.fd, err)
 }
-func (u *upstream) Sent(error) {}
+func (c *client) Sent() {
+	c.pos++
+	c.sendActive = false
+	c.send()
+}
+
+func (c *client) send() {
+	if c.sendActive {
+		return
+	}
+	if c.pos < len(c.chat.posts) {
+		c.sendActive = true
+		c.conn.Send(c.chat.posts[c.pos])
+
+	}
+}
+
+type chat struct {
+	posts   [][]byte
+	clients map[int]*client
+}
+
+func newChat() *chat {
+	return &chat{
+		clients: make(map[int]*client),
+	}
+}
+
+func (c *chat) remove(fd int) {
+	delete(c.clients, fd)
+}
+
+func (c *chat) post(data []byte) {
+	c.posts = append(c.posts, data)
+	for _, cli := range c.clients {
+		cli.send()
+	}
+}
+
+func (c *chat) newClient(fd int, conn conn) *client {
+	cli := &client{fd: fd, conn: conn, chat: c, pos: -1}
+	if _, ok := c.clients[fd]; ok {
+		panic("client fd used")
+	}
+	c.clients[fd] = cli
+	return cli
+}

@@ -19,11 +19,13 @@ const (
 )
 
 type completionCallback = func(res int32, flags uint32, errno syscall.Errno)
+type operation = func(*giouring.SubmissionQueueEntry)
 
 type Loop struct {
 	ring      *giouring.Ring
 	callbacks callbacks
 	buffers   providedBuffers
+	pending   []operation
 }
 
 type Options struct {
@@ -71,9 +73,22 @@ func (l *Loop) RunUntilDone() error {
 	}
 }
 
-// Run until context is canceled.
+func (l *Loop) Run(ctx context.Context, onCtxDone func()) error {
+	if err := l.RunCtx(ctx, time.Millisecond*333); err != nil {
+		return err
+	}
+	// call handler to
+	onCtxDone()
+	// run loop until all operations finishes
+	if err := l.RunUntilDone(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// RunCtx until context is canceled.
 // Check context every timeout.
-func (l *Loop) Run(ctx context.Context, timeout time.Duration) error {
+func (l *Loop) RunCtx(ctx context.Context, timeout time.Duration) error {
 	ts := syscall.NsecToTimespec(int64(timeout))
 	done := func() bool {
 		select {
@@ -84,7 +99,7 @@ func (l *Loop) Run(ctx context.Context, timeout time.Duration) error {
 		return false
 	}
 	for {
-		if err := l.submitAndWait(0); err != nil {
+		if err := l.submit(); err != nil {
 			return err
 		}
 		if _, err := l.ring.WaitCQEs(1, &ts, nil); err != nil && !TemporaryErr(err) {
@@ -114,14 +129,42 @@ func TemporaryErrno(errno syscall.Errno) bool {
 }
 
 // retry on temporary errors
-func (l *Loop) submitAndWait(waitNr int) error {
+func (l *Loop) submitAndWait(waitNr uint32) error {
 	for {
-		_, err := l.ring.SubmitAndWait(0)
+		if len(l.pending) > 0 {
+			_, err := l.ring.SubmitAndWait(0)
+			if err == nil {
+				l.preparePending()
+			}
+		}
+
+		_, err := l.ring.SubmitAndWait(waitNr)
 		if err != nil && TemporaryErr(err) {
 			continue
 		}
 		return err
 	}
+}
+
+func (l *Loop) preparePending() {
+	prepared := 0
+	for _, op := range l.pending {
+		sqe := l.ring.GetSQE()
+		if sqe == nil {
+			break
+		}
+		op(sqe)
+		prepared++
+	}
+	if prepared == len(l.pending) {
+		l.pending = nil
+	} else {
+		l.pending = l.pending[prepared:]
+	}
+}
+
+func (l *Loop) submit() error {
+	return l.submitAndWait(0)
 }
 
 func (l *Loop) flushCompletions() uint32 {
@@ -151,7 +194,7 @@ func (l *Loop) getSQE() (*giouring.SubmissionQueueEntry, error) {
 	for {
 		sqe := l.ring.GetSQE()
 		if sqe == nil {
-			if _, err := l.ring.Submit(); err != nil {
+			if err := l.submit(); err != nil {
 				return nil, err
 			}
 			continue
@@ -164,68 +207,64 @@ func (l *Loop) Close() {
 	l.ring.QueueExit()
 }
 
-func (l *Loop) PrepareMultishotAccept(fd int, cb completionCallback) error {
-	sqe, err := l.getSQE()
-	if err != nil {
-		return err
+// prepares operation or adds it to pending if can't get sqe
+func (l *Loop) prepare(op operation) {
+	sqe := l.ring.GetSQE()
+	if sqe == nil { // submit and retry
+		l.submit()
+		sqe = l.ring.GetSQE()
 	}
-	sqe.PrepareMultishotAccept(fd, 0, 0, 0)
-	l.callbacks.set(sqe, cb)
-	return nil
+	if sqe == nil { // still nothing, add to pending
+		l.pending = append(l.pending, op)
+		return
+	}
+	op(sqe)
 }
 
-func (l *Loop) PrepareCancelFd(fd int, cb completionCallback) error {
-	sqe, err := l.getSQE()
-	if err != nil {
-		return err
-	}
-	sqe.PrepareCancelFd(fd, 0)
-	l.callbacks.set(sqe, cb)
-	return nil
+func (l *Loop) PrepareMultishotAccept(fd int, cb completionCallback) {
+	l.prepare(func(sqe *giouring.SubmissionQueueEntry) {
+		sqe.PrepareMultishotAccept(fd, 0, 0, 0)
+		l.callbacks.set(sqe, cb)
+	})
 }
 
-func (l *Loop) PrepareShutdown(fd int, cb completionCallback) error {
-	sqe, err := l.getSQE()
-	if err != nil {
-		return err
-	}
-	const SHUT_RDWR = 2
-	sqe.PrepareShutdown(fd, SHUT_RDWR)
-	l.callbacks.set(sqe, cb)
-	return nil
+func (l *Loop) PrepareCancelFd(fd int, cb completionCallback) {
+	l.prepare(func(sqe *giouring.SubmissionQueueEntry) {
+		sqe.PrepareCancelFd(fd, 0)
+		l.callbacks.set(sqe, cb)
+	})
 }
 
-func (l *Loop) PrepareClose(fd int, cb completionCallback) error {
-	sqe, err := l.getSQE()
-	if err != nil {
-		return err
-	}
-	sqe.PrepareClose(fd)
-	l.callbacks.set(sqe, cb)
-	return nil
+func (l *Loop) PrepareShutdown(fd int, cb completionCallback) {
+	l.prepare(func(sqe *giouring.SubmissionQueueEntry) {
+		const SHUT_RDWR = 2
+		sqe.PrepareShutdown(fd, SHUT_RDWR)
+		l.callbacks.set(sqe, cb)
+	})
 }
 
-func (l *Loop) PrepareSend(fd int, buf []byte, cb completionCallback) error {
-	sqe, err := l.getSQE()
-	if err != nil {
-		return err
-	}
-	sqe.PrepareSend(fd, uintptr(unsafe.Pointer(&buf[0])), uint32(len(buf)), 0)
-	l.callbacks.set(sqe, cb)
-	return nil
+func (l *Loop) PrepareClose(fd int, cb completionCallback) {
+	l.prepare(func(sqe *giouring.SubmissionQueueEntry) {
+		sqe.PrepareClose(fd)
+		l.callbacks.set(sqe, cb)
+	})
+}
+
+func (l *Loop) PrepareSend(fd int, buf []byte, cb completionCallback) {
+	l.prepare(func(sqe *giouring.SubmissionQueueEntry) {
+		sqe.PrepareSend(fd, uintptr(unsafe.Pointer(&buf[0])), uint32(len(buf)), 0)
+		l.callbacks.set(sqe, cb)
+	})
 }
 
 // Multishot, provided buffers recv
-func (l *Loop) PrepareRecv(fd int, cb completionCallback) error {
-	sqe, err := l.getSQE()
-	if err != nil {
-		return err
-	}
-	sqe.PrepareRecvMultishot(fd, 0, 0, 0)
-	sqe.Flags = giouring.SqeBufferSelect
-	sqe.BufIG = buffersGroupID
-	l.callbacks.set(sqe, cb)
-	return nil
+func (l *Loop) PrepareRecv(fd int, cb completionCallback) {
+	l.prepare(func(sqe *giouring.SubmissionQueueEntry) {
+		sqe.PrepareRecvMultishot(fd, 0, 0, 0)
+		sqe.Flags = giouring.SqeBufferSelect
+		sqe.BufIG = buffersGroupID
+		l.callbacks.set(sqe, cb)
+	})
 }
 
 func cqeErrno(c *giouring.CompletionQueueEvent) syscall.Errno {

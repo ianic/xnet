@@ -55,14 +55,6 @@ type Session interface {
 	Send(payload []byte) error
 }
 
-type session struct {
-	conn *Conn
-}
-
-func (s *session) Send(payload []byte) error {
-	return s.conn.WriteBinary(payload)
-}
-
 type Upgrader struct {
 	handler SessionHandler
 	conns   map[int]*Conn

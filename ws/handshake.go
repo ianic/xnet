@@ -159,10 +159,9 @@ func secAccept(key string) string {
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
-func (h *Handshake) NewAsyncConn(stream AsyncTcpConn, handler Upstream) *AsyncConn {
+func (h *Handshake) NewAsyncConn(tc TcpConn) *AsyncConn {
 	return &AsyncConn{
-		tc:                stream,
-		up:                handler,
+		tc:                tc,
 		permessageDeflate: h.extension.permessageDeflate,
 	}
 }

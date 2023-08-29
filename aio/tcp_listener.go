@@ -5,45 +5,42 @@ import (
 	"syscall"
 )
 
-type NewConn func(int, *TcpConn) Conn
+type NewConn func(int, *TcpConn) Upstream
 
 type TcpListener struct {
 	loop    *Loop
 	fd      int
 	newConn NewConn
-	conns   map[int]TcpConn
+	conns   map[int]*TcpConn
 }
 
 func NewTcpListener(loop *Loop, port int, newConn NewConn) (*TcpListener, error) {
 	l := &TcpListener{
 		loop:    loop,
 		newConn: newConn,
-		conns:   make(map[int]TcpConn),
+		conns:   make(map[int]*TcpConn),
 	}
 	if err := l.bind(port); err != nil {
 		return nil, err
 	}
-	if err := l.accept(); err != nil {
-		syscall.Close(l.fd)
-		return nil, err
-	}
+	l.accept()
 	return l, nil
 }
 
-func (l *TcpListener) accept() error {
-	return l.loop.PrepareMultishotAccept(l.fd, func(res int32, flags uint32, errno syscall.Errno) {
+func (l *TcpListener) accept() {
+	l.loop.PrepareMultishotAccept(l.fd, func(res int32, flags uint32, errno syscall.Errno) {
 		if errno == 0 {
 			fd := int(res)
 			// connect Conn and TcpConn
-			tc := TcpConn{loop: l.loop, fd: fd, lsn: l}
-			conn := l.newConn(fd, &tc)
-			tc.conn = conn
+			tc := &TcpConn{loop: l.loop, fd: fd, lsn: l}
+			conn := l.newConn(fd, tc)
+			tc.up = conn
 			l.conns[fd] = tc
 			tc.recvLoop()
 			return
 		}
 		if errno != syscall.ECANCELED {
-			slog.Debug("accept", "errno", errno, "res", res, "flags", flags)
+			slog.Debug("listener accept", "fd", l.fd, "errno", errno, "res", res, "flags", flags)
 		}
 	})
 }
@@ -58,13 +55,14 @@ func (l *TcpListener) bind(port int) error {
 	return nil
 }
 
-func (l *TcpListener) Close() error {
-	return l.loop.PrepareCancelFd(l.fd, func(res int32, flags uint32, errno syscall.Errno) {
-		//slog.Debug("TcpListener close", "errno", errno, "res", res, "flags", flags)
-		for _, conn := range l.conns {
-			conn.shutdown(nil)
+func (l *TcpListener) Close() {
+	l.loop.PrepareCancelFd(l.fd, func(res int32, flags uint32, errno syscall.Errno) {
+		if errno != 0 {
+			slog.Debug("listener cancel", "fd", l.fd, "errno", errno, "res", res, "flags", flags)
 		}
-		//clear(l.conns)
+		for _, conn := range l.conns {
+			conn.shutdown(ErrListenerClose)
+		}
 	})
 }
 

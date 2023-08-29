@@ -14,7 +14,7 @@ func (h *testHandler) Received(data []byte) {
 }
 
 func (h *testHandler) Closed(error) {}
-func (h *testHandler) Sent(error)   {}
+func (h *testHandler) Sent()        {}
 
 type testStream struct {
 	sent       [][]byte
@@ -22,9 +22,8 @@ type testStream struct {
 	closeError error
 }
 
-func (s *testStream) Send(data []byte) error {
+func (s *testStream) Send(data []byte) {
 	s.sent = append(s.sent, data)
-	return nil
 }
 
 func (s *testStream) Close() {

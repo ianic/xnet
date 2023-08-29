@@ -8,7 +8,7 @@ import (
 )
 
 type Sender interface {
-	Send(fd int, data []byte) error
+	Send(fd int, data []byte)
 	// Close(fd int)
 }
 
@@ -36,18 +36,15 @@ func NewListener(loop *Loop, port int, srv Server) (*Listener, error) {
 	if err := l.bind(port); err != nil {
 		return nil, err
 	}
-	if err := l.accept(); err != nil {
-		syscall.Close(l.fd)
-		return nil, err
-	}
+	l.accept()
 	srv.OnStart(l)
 	return l, nil
 }
 
-func (l *Listener) Send(fd int, data []byte) error {
+func (l *Listener) Send(fd int, data []byte) {
 	if _, ok := l.conns[fd]; !ok {
 		l.srv.OnSend(fd, syscall.ENOTCONN)
-		return nil
+		return
 	}
 	nn := 0
 	var cb completionCallback
@@ -64,13 +61,10 @@ func (l *Listener) Send(fd int, data []byte) error {
 			l.srv.OnSend(fd, nil)
 			return
 		}
-		if err := l.loop.PrepareSend(fd, data[nn:], cb); err != nil {
-			// here also nn could be > 0
-			l.srv.OnSend(fd, err)
-		}
+		l.loop.PrepareSend(fd, data[nn:], cb)
 		// new send prepared
 	}
-	return l.loop.PrepareSend(fd, data, cb)
+	l.loop.PrepareSend(fd, data, cb)
 }
 
 func (l *Listener) bind(port int) error {
@@ -83,8 +77,8 @@ func (l *Listener) bind(port int) error {
 	return nil
 }
 
-func (l *Listener) accept() error {
-	return l.loop.PrepareMultishotAccept(l.fd, func(res int32, flags uint32, errno syscall.Errno) {
+func (l *Listener) accept() {
+	l.loop.PrepareMultishotAccept(l.fd, func(res int32, flags uint32, errno syscall.Errno) {
 		if errno == 0 {
 			fd := int(res)
 			l.srv.OnConnect(fd)
@@ -102,8 +96,8 @@ func (l *Listener) accept() error {
 // 	return syscall.Close(l.fd)
 // }
 
-func (l *Listener) Close() error {
-	return l.loop.PrepareCancelFd(l.fd, func(res int32, flags uint32, errno syscall.Errno) {
+func (l *Listener) Close() {
+	l.loop.PrepareCancelFd(l.fd, func(res int32, flags uint32, errno syscall.Errno) {
 		slog.Debug("listener close", "errno", errno, "res", res, "flags", flags)
 		for fd := range l.conns {
 			l.shutdown(fd, nil)
@@ -113,7 +107,7 @@ func (l *Listener) Close() error {
 
 // recvLoop starts multishot recv on fd
 // Will receive on fd until error occures.
-func (l *Listener) recvLoop(fd int) error {
+func (l *Listener) recvLoop(fd int) {
 	l.conns[fd] = struct{}{}
 
 	var cb completionCallback
@@ -135,11 +129,10 @@ func (l *Listener) recvLoop(fd int) error {
 			return
 		}
 		buf, id := l.loop.buffers.get(res, flags)
-		//slog.Debug("read", "bufferID", id, "len", len(buf))
 		l.srv.OnRecv(fd, buf)
 		l.loop.buffers.release(buf, id)
 	}
-	return l.loop.PrepareRecv(fd, cb)
+	l.loop.PrepareRecv(fd, cb)
 }
 
 func (l *Listener) shutdown(fd int, err error) {

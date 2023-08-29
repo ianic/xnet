@@ -7,22 +7,22 @@ import (
 )
 
 // lower layer, tcp connection
-type AsyncTcpConn interface {
-	Send([]byte) error
+type TcpConn interface {
+	Send([]byte)
 	Close()
 }
 
-// upper layer
+// upper layer's events handler interface
 type Upstream interface {
 	Received([]byte)
 	Closed(error)
-	Sent(error)
+	Sent()
 }
 
 // AsyncConn
 // Makes copy of the payload before passing it downstream
 type AsyncConn struct {
-	tc                AsyncTcpConn
+	tc                TcpConn
 	up                Upstream
 	permessageDeflate bool         // connection option
 	ms                messageState // fragmented message state
@@ -159,12 +159,11 @@ func toOwnCopy(payload []byte) []byte {
 	return dst
 }
 
-func (c *AsyncConn) send(opcode OpCode, payload []byte) {
+func (c *AsyncConn) send(opcode OpCode, payload []byte) error {
 	// TODO support buffers send into upstream aio
 	buffers, err := encodeFrame(opcode, payload, c.permessageDeflate)
 	if err != nil {
-		// TODO
-		return
+		return err
 	}
 	nn := 0
 	for _, b := range buffers {
@@ -177,12 +176,27 @@ func (c *AsyncConn) send(opcode OpCode, payload []byte) {
 		nn += len(b)
 	}
 	c.tc.Send(buf)
+	return nil
+}
+
+func (c *AsyncConn) Send(payload []byte) {
+	if err := c.send(Binary, payload); err != nil {
+		c.Close()
+	}
+}
+
+func (c *AsyncConn) Close() {
+	c.tc.Close()
 }
 
 func (c *AsyncConn) Closed(err error) {
 	c.up.Closed(err)
 }
 
-func (c *AsyncConn) Sent(err error) {
-	c.up.Sent(err)
+func (c *AsyncConn) Sent() {
+	c.up.Sent()
+}
+
+func (c *AsyncConn) SetUpstream(up Upstream) {
+	c.up = up
 }

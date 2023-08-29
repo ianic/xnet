@@ -34,7 +34,7 @@ func run(port int) error {
 		return err
 	}
 	defer lp.Close()
-	ln, err := aio.NewTcpListener(lp, port, func(fd int, tc *aio.TcpConn) aio.Conn {
+	ln, err := aio.NewTcpListener(lp, port, func(fd int, tc *aio.TcpConn) aio.Upstream {
 		return &conn{fd: fd, sender: tc}
 	})
 	if err != nil {
@@ -42,7 +42,7 @@ func run(port int) error {
 	}
 
 	ctx := signal.InteruptContext()
-	if err := lp.Run(ctx, time.Second); err != nil {
+	if err := lp.RunCtx(ctx, time.Second); err != nil {
 		slog.Error("run", "error", err)
 	}
 	ln.Close()
@@ -56,7 +56,7 @@ func run(port int) error {
 }
 
 type Sender interface {
-	Send(data []byte) error
+	Send(data []byte)
 }
 
 type conn struct {
@@ -75,6 +75,6 @@ func (c *conn) Received(data []byte) {
 func (c *conn) Closed(error) {
 	slog.Debug("closed", "fd", c.fd)
 }
-func (c *conn) Sent(error) {
+func (c *conn) Sent() {
 	slog.Debug("sent", "fd", c.fd)
 }
