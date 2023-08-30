@@ -11,12 +11,12 @@ import (
 )
 
 func main() {
-	if err := run(4243); err != nil {
+	if err := run("127.0.0.1:4243"); err != nil {
 		log.Panic(err)
 	}
 }
 
-func run(port int) error {
+func run(ipPort string) error {
 	// create loop
 	loop, err := aio.New(aio.DefaultOptions)
 	if err != nil {
@@ -25,25 +25,23 @@ func run(port int) error {
 	defer loop.Close()
 
 	chat := newChat()
-	upgrade := func(fd int, tc *aio.TcpConn, wc *ws.AsyncConn) {
-		cli := chat.newClient(fd, wc)
-		wc.SetUpstream(cli)
-		tc.SetUpstream(wc) // replaces handshake
-	}
 
 	// start tcp listener
-	lsn, err := aio.NewTcpListener(loop, port, func(fd int, tc *aio.TcpConn) aio.Upstream {
-		// start handshake for accepted connection
-		return &handshake{
-			fd:      fd,
-			tcpConn: tc,
-			upgrade: upgrade,
-		}
-	})
+	lsn, err := aio.NewTcpListener(loop, ipPort,
+		func(fd int, tc *aio.TcpConn, bind func(aio.Upstream)) {
+			// start handshake for accepted connection
+			bind(&handshake{
+				tcpConn: tc,
+				upgrade: func(wc *ws.AsyncConn) {
+					wc.Bind(chat.newClient(fd, wc)) // bind websocket to upstream client
+					bind(wc)                        // bind tcp conn to websocket conn
+				},
+			})
+		})
 	if err != nil {
 		return err
 	}
-	if err := loop.Run(signal.InteruptContext(), func() { lsn.Close() }); err != nil {
+	if err := loop.Run(signal.InterruptContext(), func() { lsn.Close() }); err != nil {
 		slog.Error("run", "error", err)
 	}
 
@@ -51,20 +49,19 @@ func run(port int) error {
 }
 
 type handshake struct {
-	fd      int
 	tcpConn *aio.TcpConn
-	upgrade func(int, *aio.TcpConn, *ws.AsyncConn)
+	upgrade func(*ws.AsyncConn)
 }
 
 func (h *handshake) Received(data []byte) {
 	hs, err := ws.NewHandshakeFromBuffer(data)
 	if err != nil {
 		slog.Info("handshake failed", slog.String("error", err.Error()))
+		h.upgrade(nil)
 		h.tcpConn.Close()
 		return
 	}
-	wc := hs.NewAsyncConn(h.tcpConn)
-	h.upgrade(h.fd, h.tcpConn, wc)
+	h.upgrade(hs.NewAsyncConn(h.tcpConn))
 	h.tcpConn.Send([]byte(hs.Response()))
 }
 func (h *handshake) Closed(error) {}

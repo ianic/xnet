@@ -13,8 +13,8 @@ func WaitForInterupt() {
 	<-quit
 }
 
-// interuptContext returns context which will be closed on application interupt
-func InteruptContext() context.Context {
+// InterruptContext returns context which will be closed on application interrupt
+func InterruptContext() context.Context {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		WaitForInterupt()

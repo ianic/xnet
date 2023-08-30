@@ -3,29 +3,20 @@ package main
 import (
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/ianic/xnet/aio"
 	"github.com/ianic/xnet/aio/signal"
 )
 
 func main() {
-	// slog.SetDefault(slog.New(
-	// 	slog.NewTextHandler(
-	// 		os.Stderr,
-	// 		&slog.HandlerOptions{
-	// 			Level:     slog.LevelDebug,
-	// 			AddSource: true,
-	// 		})))
-	if err := run(4242); err != nil {
+	if err := run("127.0.0.1:4242"); err != nil {
 		slog.Error("run", "error", err)
 	}
-
 }
 
-func run(port int) error {
-	slog.Debug("starting server", "port", port)
-	lp, err := aio.New(aio.Options{
+func run(ipPort string) error {
+	// start loop
+	loop, err := aio.New(aio.Options{
 		RingEntries:      128,
 		RecvBuffersCount: 256,
 		RecvBufferLen:    1024,
@@ -33,24 +24,24 @@ func run(port int) error {
 	if err != nil {
 		return err
 	}
-	defer lp.Close()
-	ln, err := aio.NewTcpListener(lp, port, func(fd int, tc *aio.TcpConn) aio.Upstream {
-		return &conn{fd: fd, sender: tc}
-	})
+	defer loop.Close()
+	// start listener
+	lsn, err := aio.NewTcpListener(loop, ipPort,
+		func(fd int, tc *aio.TcpConn, bind func(aio.Upstream)) {
+			bind(&conn{fd: fd, sender: tc})
+		})
 	if err != nil {
 		return err
 	}
-
-	ctx := signal.InteruptContext()
-	if err := lp.RunCtx(ctx, time.Second); err != nil {
-		slog.Error("run", "error", err)
+	slog.Debug("started server", "addr", ipPort, "port", lsn.Port())
+	// run util interrupted
+	ctx := signal.InterruptContext()
+	if err := loop.Run(ctx, func() { lsn.Close() }); err != nil {
+		return err
 	}
-	ln.Close()
-	if err := lp.RunUntilDone(); err != nil {
-		slog.Error("run", "error", err)
-	}
-	if cc := ln.ConnCount(); cc != 0 {
-		panic(fmt.Sprintf("listner conn count should be 0 actual %d", cc))
+	// check cleanup
+	if cc := lsn.ConnCount(); cc != 0 {
+		panic(fmt.Sprintf("listener conn count should be 0 actual %d", cc))
 	}
 	return nil
 }
@@ -66,7 +57,6 @@ type conn struct {
 
 func (c *conn) Received(data []byte) {
 	slog.Debug("received", "fd", c.fd, "len", len(data))
-
 	dst := make([]byte, len(data))
 	copy(dst, data)
 	c.sender.Send(dst)

@@ -197,6 +197,6 @@ func (c *AsyncConn) Sent() {
 	c.up.Sent()
 }
 
-func (c *AsyncConn) SetUpstream(up Upstream) {
+func (c *AsyncConn) Bind(up Upstream) {
 	c.up = up
 }

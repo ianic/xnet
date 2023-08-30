@@ -7,6 +7,11 @@ import (
 	"syscall"
 )
 
+var (
+	ErrListenerClose = errors.New("listener closed connection")
+	ErrUpstreamClose = errors.New("upstream closed connection")
+)
+
 // upper layer's events handler interface
 type Upstream interface {
 	Received([]byte)
@@ -22,10 +27,17 @@ type TcpConn struct {
 	shutdownError error
 }
 
-var (
-	ErrListenerClose = errors.New("listener closed connection")
-	ErrUpstreamClose = errors.New("upstream closed connection")
-)
+func newTcpConn(loop *Loop, lsn *TcpListener, fd int) *TcpConn {
+	return &TcpConn{loop: loop, fd: fd, lsn: lsn}
+}
+
+func (t *TcpConn) Bind(up Upstream) {
+	startRecv := t.up == nil
+	t.up = up
+	if startRecv {
+		t.recvLoop()
+	}
+}
 
 // TODO: add correlation id (userdata) for send/sent connecting
 func (l *TcpConn) Send(data []byte) {

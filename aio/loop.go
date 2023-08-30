@@ -128,7 +128,11 @@ func TemporaryErrno(errno syscall.Errno) bool {
 	return errno.Temporary() || errno == unix.ETIME || errno == syscall.ENOBUFS
 }
 
-// retry on temporary errors
+// Retries on temporary errors.
+// Anything not handled here is fatal and application should terminate.
+// Errors that can be returned by [io_uring_enter].
+//
+// [io_uring_enter]: https://manpages.debian.org/unstable/liburing-dev/io_uring_enter.2.en.html#ERRORS
 func (l *Loop) submitAndWait(waitNr uint32) error {
 	for {
 		if len(l.pending) > 0 {
