@@ -261,6 +261,24 @@ func (l *Loop) PrepareSend(fd int, buf []byte, cb completionCallback) {
 	})
 }
 
+// references from stdlib:
+// https://github.com/golang/go/blob/140266fe7521bf75bf0037f12265190213cc8e7d/src/internal/poll/writev.go#L16
+// https://github.com/golang/go/blob/140266fe7521bf75bf0037f12265190213cc8e7d/src/internal/poll/fd_writev_unix.go#L20
+func (l *Loop) PrepareWritev(fd int, buffers [][]byte, cb completionCallback) {
+	l.prepare(func(sqe *giouring.SubmissionQueueEntry) {
+		var iovecs []syscall.Iovec
+		for _, buf := range buffers {
+			if len(buf) == 0 {
+				continue
+			}
+			iovecs = append(iovecs, syscall.Iovec{Base: &buf[0]})
+			iovecs[len(iovecs)-1].SetLen(len(buf))
+		}
+		sqe.PrepareWritev(fd, uintptr(unsafe.Pointer(&iovecs[0])), uint32(len(iovecs)), 0)
+		l.callbacks.set(sqe, cb)
+	})
+}
+
 // Multishot, provided buffers recv
 func (l *Loop) PrepareRecv(fd int, cb completionCallback) {
 	l.prepare(func(sqe *giouring.SubmissionQueueEntry) {

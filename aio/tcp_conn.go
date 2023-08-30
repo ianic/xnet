@@ -31,105 +31,141 @@ func newTcpConn(loop *Loop, lsn *TcpListener, fd int) *TcpConn {
 	return &TcpConn{loop: loop, fd: fd, lsn: lsn}
 }
 
-func (t *TcpConn) Bind(up Upstream) {
-	startRecv := t.up == nil
-	t.up = up
+func (tc *TcpConn) Bind(up Upstream) {
+	startRecv := tc.up == nil
+	tc.up = up
 	if startRecv {
-		t.recvLoop()
+		tc.recvLoop()
 	}
 }
 
 // TODO: add correlation id (userdata) for send/sent connecting
-func (l *TcpConn) Send(data []byte) {
+func (tc *TcpConn) Send(data []byte) {
 	nn := 0 // number of bytes sent
 	var cb completionCallback
 	cb = func(res int32, flags uint32, errno syscall.Errno) {
 		nn += int(res) // bytes written so far
 		if errno > 0 {
-			l.shutdown(errno)
+			tc.shutdown(errno)
 			return
 		}
 		if nn >= len(data) {
 			// all sent call callback
-			l.up.Sent()
+			tc.up.Sent()
 			return
 		}
 		// send rest of the data
-		l.loop.PrepareSend(l.fd, data[nn:], cb)
+		tc.loop.PrepareSend(tc.fd, data[nn:], cb)
 		// new send prepared
 	}
-	l.loop.PrepareSend(l.fd, data, cb)
+	tc.loop.PrepareSend(tc.fd, data, cb)
 }
 
-func (l *TcpConn) Close() {
-	l.shutdown(ErrUpstreamClose)
+func (tc *TcpConn) SendBuffers(buffers [][]byte) {
+	var cb completionCallback
+	cb = func(res int32, flags uint32, errno syscall.Errno) {
+		n := int(res)
+		if errno > 0 {
+			tc.shutdown(errno)
+			return
+		}
+		consume(&buffers, n)
+		if len(buffers) == 0 {
+			tc.up.Sent()
+			return
+		}
+		// send rest of the data
+		tc.loop.PrepareWritev(tc.fd, buffers, cb)
+		// new send prepared
+	}
+	tc.loop.PrepareWritev(tc.fd, buffers, cb)
+}
+
+// consume removes data from a slice of byte slices, for writev.
+// copied from:
+// https://github.com/golang/go/blob/140266fe7521bf75bf0037f12265190213cc8e7d/src/internal/poll/fd.go#L69
+func consume(v *[][]byte, n int) {
+	for len(*v) > 0 {
+		ln0 := len((*v)[0])
+		if ln0 > n {
+			(*v)[0] = (*v)[0][n:]
+			return
+		}
+		n -= ln0
+		(*v)[0] = nil
+		*v = (*v)[1:]
+	}
+}
+
+func (tc *TcpConn) Close() {
+	tc.shutdown(ErrUpstreamClose)
 }
 
 // Allows upper layer to change connection handler.
 // Useful in websocket handshake for example.
-func (l *TcpConn) SetUpstream(conn Upstream) {
-	l.up = conn
+func (tc *TcpConn) SetUpstream(conn Upstream) {
+	tc.up = conn
 }
 
 // recvLoop starts multishot recv on fd
 // Will receive on fd until error occurs.
-func (l *TcpConn) recvLoop() {
+func (tc *TcpConn) recvLoop() {
 	var cb completionCallback
 	cb = func(res int32, flags uint32, errno syscall.Errno) {
 		if errno > 0 {
 			if TemporaryErrno(errno) {
 				slog.Debug("tcp conn read temporary error", "error", errno.Error(), "errno", uint(errno), "flags", flags)
-				l.loop.PrepareRecv(l.fd, cb)
+				tc.loop.PrepareRecv(tc.fd, cb)
 				return
 			}
 			if errno != syscall.ECONNRESET {
 				slog.Warn("tcp conn read error", "error", errno.Error(), "errno", uint(errno), "flags", flags)
 			}
-			l.shutdown(errno)
+			tc.shutdown(errno)
 			return
 		}
 		if res == 0 {
-			l.shutdown(io.EOF)
+			tc.shutdown(io.EOF)
 			return
 		}
-		buf, id := l.loop.buffers.get(res, flags)
-		l.up.Received(buf)
-		l.loop.buffers.release(buf, id)
+		buf, id := tc.loop.buffers.get(res, flags)
+		tc.up.Received(buf)
+		tc.loop.buffers.release(buf, id)
 		if !isMultiShot(flags) {
 			slog.Debug("tcp conn multishot terminated", slog.Uint64("flags", uint64(flags)), slog.Uint64("errno", uint64(errno)))
 			// io_uring can terminate multishot recv when cqe is full
 			// need to restart it then
 			// ref: https://lore.kernel.org/lkml/20220630091231.1456789-3-dylany@fb.com/T/#re5daa4d5b6e4390ecf024315d9693e5d18d61f10
-			l.loop.PrepareRecv(l.fd, cb)
+			tc.loop.PrepareRecv(tc.fd, cb)
 		}
 	}
-	l.loop.PrepareRecv(l.fd, cb)
+	tc.loop.PrepareRecv(tc.fd, cb)
 }
 
 // shutdown tcp (both) then close fd
-func (l *TcpConn) shutdown(err error) {
+func (tc *TcpConn) shutdown(err error) {
 	if err == nil {
 		panic("tcp conn missing shutdown reason")
 	}
-	if l.shutdownError != nil {
+	if tc.shutdownError != nil {
 		return
 	}
-	l.shutdownError = err
-	l.loop.PrepareShutdown(l.fd, func(res int32, flags uint32, errno syscall.Errno) {
+	tc.shutdownError = err
+	tc.loop.PrepareShutdown(tc.fd, func(res int32, flags uint32, errno syscall.Errno) {
 		if !(errno == 0 || errno == syscall.ENOTCONN) {
-			slog.Debug("tcp conn shutdown", "fd", l.fd, "errno", errno, "res", res, "flags", flags)
+			slog.Debug("tcp conn shutdown", "fd", tc.fd, "errno", errno, "res", res, "flags", flags)
 		}
 		if errno != 0 {
-			l.lsn.remove(l.fd)
-			l.up.Closed(l.shutdownError)
+			tc.lsn.remove(tc.fd)
+			tc.up.Closed(tc.shutdownError)
 			return
 		}
-		l.loop.PrepareClose(l.fd, func(res int32, flags uint32, errno syscall.Errno) {
+		tc.loop.PrepareClose(tc.fd, func(res int32, flags uint32, errno syscall.Errno) {
 			if errno != 0 {
-				slog.Debug("tcp conn close", "fd", l.fd, "errno", errno, "res", res, "flags", flags)
+				slog.Debug("tcp conn close", "fd", tc.fd, "errno", errno, "res", res, "flags", flags)
 			}
-			l.lsn.remove(l.fd)
-			l.up.Closed(l.shutdownError)
+			tc.lsn.remove(tc.fd)
+			tc.up.Closed(tc.shutdownError)
 		})
 	})
 }

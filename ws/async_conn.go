@@ -8,7 +8,7 @@ import (
 
 // lower layer, tcp connection
 type TcpConn interface {
-	Send([]byte)
+	SendBuffers([][]byte)
 	Close()
 }
 
@@ -160,22 +160,11 @@ func toOwnCopy(payload []byte) []byte {
 }
 
 func (c *AsyncConn) send(opcode OpCode, payload []byte) error {
-	// TODO support buffers send into upstream aio
 	buffers, err := encodeFrame(opcode, payload, c.permessageDeflate)
 	if err != nil {
 		return err
 	}
-	nn := 0
-	for _, b := range buffers {
-		nn += len(b)
-	}
-	buf := make([]byte, nn)
-	nn = 0
-	for _, b := range buffers {
-		copy(buf[nn:], b)
-		nn += len(b)
-	}
-	c.tc.Send(buf)
+	c.tc.SendBuffers(buffers)
 	return nil
 }
 
