@@ -22,8 +22,8 @@ type testStream struct {
 	closeError error
 }
 
-func (s *testStream) Send(data []byte) {
-	s.sent = append(s.sent, data)
+func (s *testStream) SendBuffers(buffers [][]byte) {
+	s.sent = append(s.sent, buffers...)
 }
 
 func (s *testStream) Close() {
@@ -113,7 +113,7 @@ func TestAsyncConnParseFragmentedMessage(t *testing.T) {
 		t.Fatalf("unexpected upstream communication messages: %d", len(h.received))
 	}
 
-	if len(s.sent) != 1 || !bytes.Equal(s.sent[0], pongFrame) {
+	if len(s.sent) != 2 || !bytes.Equal(s.sent[0], pongFrame) {
 		t.Fatalf("unexpected downstream send %d", len(s.sent))
 	}
 }
