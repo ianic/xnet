@@ -25,11 +25,14 @@ func run(ipPort string) error {
 		return err
 	}
 	defer loop.Close()
+
+	// called when tcp listener accepts tcp connection
+	tcpAccepted := func(fd int, tc *aio.TcpConn) {
+		tc.Bind(&conn{fd: fd, sender: tc})
+	}
+
 	// start listener
-	lsn, err := aio.NewTcpListener(loop, ipPort,
-		func(fd int, tc *aio.TcpConn, bind func(aio.Upstream)) {
-			bind(&conn{fd: fd, sender: tc})
-		})
+	lsn, err := aio.NewTcpListener(loop, ipPort, tcpAccepted)
 	if err != nil {
 		return err
 	}

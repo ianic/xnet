@@ -71,6 +71,7 @@ func TestAsyncConnParseMessage(t *testing.T) {
 
 func TestAsyncConnParseFragmentedMessage(t *testing.T) {
 	h := testHandler{}
+
 	s := testStream{}
 	c := AsyncConn{tc: &s, up: &h}
 

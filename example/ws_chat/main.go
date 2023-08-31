@@ -26,21 +26,28 @@ func run(ipPort string) error {
 
 	chat := newChat()
 
-	// start tcp listener
-	lsn, err := aio.NewTcpListener(loop, ipPort,
-		func(fd int, tc *aio.TcpConn, bind func(aio.Upstream)) {
-			// start handshake for accepted connection
-			bind(&handshake{
-				tcpConn: tc,
-				upgrade: func(wc *ws.AsyncConn) {
-					wc.Bind(chat.newClient(fd, wc)) // bind websocket to upstream client
-					bind(wc)                        // bind tcp conn to websocket conn
-				},
-			})
+	// called when ws handshake is successful
+	// upgrades tcp connection to websocket connection
+	wsAccepted := func(fd int, tc *aio.TcpConn, wc *ws.AsyncConn) {
+		cli := chat.newClient(fd, wc)
+		tc.Bind(wc)  // rebind tcp connection from handshake to websocket
+		wc.Bind(cli) // bind websocket to upstream chat client
+	}
+	// called when tcp listener accepts tcp connection
+	tcpAccepted := func(fd int, tc *aio.TcpConn) {
+		tc.Bind(&handshake{
+			fd:         fd,
+			tcpConn:    tc,
+			wsAccepted: wsAccepted,
 		})
+	}
+
+	// start tcp listener
+	lsn, err := aio.NewTcpListener(loop, ipPort, tcpAccepted)
 	if err != nil {
 		return err
 	}
+	// run loop, this is blocking
 	if err := loop.Run(signal.InterruptContext(), func() { lsn.Close() }); err != nil {
 		slog.Error("run", "error", err)
 	}
@@ -49,19 +56,20 @@ func run(ipPort string) error {
 }
 
 type handshake struct {
-	tcpConn *aio.TcpConn
-	upgrade func(*ws.AsyncConn)
+	fd         int
+	tcpConn    *aio.TcpConn
+	wsAccepted func(int, *aio.TcpConn, *ws.AsyncConn)
 }
 
 func (h *handshake) Received(data []byte) {
 	hs, err := ws.NewHandshakeFromBuffer(data)
 	if err != nil {
 		slog.Info("handshake failed", slog.String("error", err.Error()))
-		h.upgrade(nil)
+		//h.upgrade(nil)
 		h.tcpConn.Close()
 		return
 	}
-	h.upgrade(hs.NewAsyncConn(h.tcpConn))
+	h.wsAccepted(h.fd, h.tcpConn, hs.NewAsyncConn(h.tcpConn))
 	h.tcpConn.Send([]byte(hs.Response()))
 }
 func (h *handshake) Closed(error) {}

@@ -10,14 +10,14 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type Binder func(fd int, tcpConn *TcpConn, bind func(Upstream))
+type Accepted func(fd int, tcpConn *TcpConn)
 
 type TcpListener struct {
-	loop  *Loop
-	fd    int
-	port  int
-	bind  Binder
-	conns map[int]*TcpConn
+	loop     *Loop
+	fd       int
+	port     int
+	accepted Accepted
+	conns    map[int]*TcpConn
 }
 
 // NewTcpListener
@@ -31,7 +31,7 @@ type TcpListener struct {
 // to change upstream layer. For example during after websocket handshake layer
 // can be change from one which were handling handshake to one which will handle
 // websocket frames.
-func NewTcpListener(loop *Loop, ipPort string, bind Binder) (*TcpListener, error) {
+func NewTcpListener(loop *Loop, ipPort string, accepted Accepted) (*TcpListener, error) {
 	so, err := ParseIPPort(ipPort)
 	if err != nil {
 		return nil, err
@@ -41,11 +41,11 @@ func NewTcpListener(loop *Loop, ipPort string, bind Binder) (*TcpListener, error
 		return nil, err
 	}
 	l := &TcpListener{
-		fd:    fd,
-		port:  port,
-		loop:  loop,
-		bind:  bind,
-		conns: make(map[int]*TcpConn),
+		fd:       fd,
+		port:     port,
+		loop:     loop,
+		accepted: accepted,
+		conns:    make(map[int]*TcpConn),
 	}
 	l.accept()
 	return l, nil
@@ -57,7 +57,7 @@ func (l *TcpListener) accept() {
 			fd := int(res)
 			// create new tcp connection and bind it with upstream layer
 			tc := newTcpConn(l.loop, l, fd)
-			l.bind(fd, tc, tc.Bind)
+			l.accepted(fd, tc)
 			l.conns[fd] = tc
 			return
 		}
