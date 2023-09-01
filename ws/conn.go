@@ -66,11 +66,12 @@ func (c *Conn) Read() (OpCode, []byte, error) {
 }
 
 func (c *Conn) read() (OpCode, []byte, error) {
-	var payload []byte
-	opcode := None
-	prevFrameFragment := fragSingle
-	compressed := false
+	// var payload []byte
+	// opcode := None
+	// prevFrameFragment := fragSingle
+	// compressed := false
 
+	partialFrame := Frame{opcode: None}
 	for {
 		frame, err := c.readFrame()
 		if err != nil {
@@ -82,33 +83,58 @@ func (c *Conn) read() (OpCode, []byte, error) {
 			}
 			continue
 		}
-		if err := verifyFrame(frame, prevFrameFragment, c.permessageDeflate); err != nil {
+		if partialFrame.opcode == None && frame.fin { // no fragmentation
+			return makeMessage(frame)
+		}
+		if err := partialFrame.append(&frame); err != nil { // append fragment
 			return None, nil, err
 		}
-
-		if frame.first() {
-			compressed = frame.rsv1()
-			opcode = frame.opcode
-			payload = frame.payload
-		} else {
-			payload = append(payload, frame.payload...)
+		if partialFrame.fin {
+			return makeMessage(partialFrame)
 		}
 
-		if frame.fin {
-			if compressed {
-				payload, err = Decompress(payload)
-				if err != nil {
-					return None, nil, err
-				}
-			}
-			if err := verifyMessage(opcode, payload); err != nil {
-				return None, nil, err
-			}
-			return opcode, payload, nil
-		}
+		// if err := verifyFrame(frame, prevFrameFragment, c.permessageDeflate); err != nil {
+		// 	return None, nil, err
+		// }
 
-		prevFrameFragment = frame.fragment()
+		// if frame.first() {
+		// 	compressed = frame.rsv1()
+		// 	opcode = frame.opcode
+		// 	payload = frame.payload
+		// } else {
+		// 	payload = append(payload, frame.payload...)
+		// }
+
+		// if frame.fin {
+		// 	if compressed {
+		// 		payload, err = Decompress(payload)
+		// 		if err != nil {
+		// 			return None, nil, err
+		// 		}
+		// 	}
+		// 	if err := verifyMessage(opcode, payload); err != nil {
+		// 		return None, nil, err
+		// 	}
+		// 	return opcode, payload, nil
+		// }
+
+		// prevFrameFragment = frame.fragment()
 	}
+}
+
+func makeMessage(frame Frame) (OpCode, []byte, error) {
+	payload := frame.payload
+	if frame.deflated {
+		var err error
+		payload, err = Decompress(payload)
+		if err != nil {
+			return None, nil, err
+		}
+	}
+	if err := verifyMessage(frame.opcode, payload); err != nil {
+		return None, nil, err
+	}
+	return frame.opcode, payload, nil
 }
 
 func verifyFrame(frame Frame, prevFragment Fragment, permessageDeflate bool) error {

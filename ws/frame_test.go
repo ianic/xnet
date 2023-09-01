@@ -156,3 +156,52 @@ func TestReadMore(t *testing.T) {
 		t.Fatalf("expect to read 3 bytes of payload")
 	}
 }
+
+func TestAppendFrame(t *testing.T) {
+	f := Frame{opcode: None}
+	hf := frameFrom(t, helloFrame)
+	if err := f.append(hf); err != nil {
+		t.Fatal(err)
+	}
+	if !f.fin || f.opcode != Text || len(f.payload) != 5 {
+		t.Fatalf("unexpected frame state")
+	}
+	if err := f.append(hf); err != ErrInvalidFragmentation {
+		t.Fatalf("can't append to fin frame %s", err)
+	}
+}
+
+func TestAppendFrameFragmentedMessage(t *testing.T) {
+	f := Frame{opcode: None}
+	if err := f.append(frameFrom(t, fragment1)); err != nil {
+		t.Fatal(err)
+	}
+	if f.fin || len(f.payload) != 1 || f.opcode != Text ||
+		f.fragment() != fragFirst {
+		t.Fatalf("unexpected frame state")
+	}
+	if err := f.append(frameFrom(t, fragment2)); err != nil {
+		t.Fatal(err)
+	}
+	if f.fin || len(f.payload) != 4 || f.opcode != Text ||
+		f.fragment() != fragFirst {
+		t.Fatalf("unexpected frame state")
+	}
+	if err := f.append(frameFrom(t, fragment3)); err != nil {
+		t.Fatal(err)
+	}
+	if !f.fin ||
+		len(f.payload) != 6 ||
+		f.opcode != Text ||
+		f.fragment() != fragSingle {
+		t.Fatalf("unexpected frame state")
+	}
+}
+
+func frameFrom(t *testing.T, buf []byte) *Frame {
+	fr, err := newFrame(&bufferBytesReader{buf: buf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &fr
+}

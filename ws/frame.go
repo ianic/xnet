@@ -475,3 +475,26 @@ func (f Frame) payloadLenBytes() int {
 func (f Frame) encode() net.Buffers {
 	return net.Buffers([][]byte{f.header(), f.payload})
 }
+
+// append one frame fragment to another
+func (f *Frame) append(o *Frame) error {
+	if o.isControl() {
+		return ErrFragmentedControlFrame
+	}
+	if f.opcode == None {
+		*f = *o
+		return nil
+	}
+	if f.fin {
+		return ErrInvalidFragmentation
+	}
+	if err := o.verifyContinuation(f.fragment()); err != nil {
+		return err
+	}
+	p := make([]byte, len(f.payload)+len(o.payload))
+	copy(p, f.payload)
+	copy(p[len(f.payload):], o.payload)
+	f.payload = p
+	f.fin = o.fin
+	return nil
+}

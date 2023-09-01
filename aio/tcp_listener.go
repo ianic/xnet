@@ -10,6 +10,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// callback fired when new connection is accepted by listener
 type Accepted func(fd int, tcpConn *TcpConn)
 
 type TcpListener struct {
