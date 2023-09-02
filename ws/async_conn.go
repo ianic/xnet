@@ -24,33 +24,9 @@ type Upstream interface {
 type AsyncConn struct {
 	tc                TcpConn
 	up                Upstream
-	permessageDeflate bool         // connection option
-	ms                messageState // fragmented message state
-	fs                frameState   // partial frame parsing state
-}
-
-type messageState struct {
-	payload           []byte
-	opcode            OpCode
-	prevFrameFragment Fragment
-	compressed        bool
-}
-
-func (ms *messageState) reset() {
-	ms.payload = nil
-	ms.opcode = None
-	ms.prevFrameFragment = fragSingle
-	ms.compressed = false
-}
-
-func (ms *messageState) add(frame Frame) {
-	if frame.first() {
-		ms.compressed = frame.rsv1()
-		ms.opcode = frame.opcode
-	}
-	// payload is always own copy
-	ms.payload = append(ms.payload, frame.payload...)
-	ms.prevFrameFragment = frame.fragment()
+	permessageDeflate bool       // connection option
+	fs                frameState // partial frame parsing state
+	partialFrame      *Frame
 }
 
 type frameState struct {
@@ -114,24 +90,18 @@ func (c *AsyncConn) readFrames(buf []byte) error {
 			c.handleControl(frame)
 			continue
 		}
-		if err := verifyFrame(frame, c.ms.prevFrameFragment, c.permessageDeflate); err != nil {
+
+		var full *Frame = nil
+		full, c.partialFrame, err = c.partialFrame.defragment(&frame)
+		if err != nil {
 			return err
 		}
-		c.ms.add(frame)
-
-		if frame.fin {
-			payload := c.ms.payload
-			if c.ms.compressed {
-				payload, err = Decompress(payload)
-				if err != nil {
-					return err
-				}
-			}
-			if err := verifyMessage(c.ms.opcode, payload); err != nil {
+		if full != nil {
+			_, payload, err := toMessage(full, c.permessageDeflate)
+			if err != nil {
 				return err
 			}
 			c.up.Received(payload) // send message downstream
-			c.ms.reset()
 		}
 	}
 }

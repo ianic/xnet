@@ -112,7 +112,10 @@ func (f Frame) rsv3() bool {
 	return f.flags&rsv3Mask != 0
 }
 
-func (f Frame) fragment() Fragment {
+func (f *Frame) fragment() Fragment {
+	if f == nil || f.opcode == None {
+		return fragSingle
+	}
 	if f.fin {
 		if f.opcode == Continuation {
 			return fragLast
@@ -207,7 +210,7 @@ func (f Frame) verifyControl() error {
 }
 
 func (f Frame) verifyRsvBits(deflateSupported bool) error {
-	if f.rsv1() && !deflateSupported {
+	if f.deflated && !deflateSupported {
 		return ErrDeflateNotSupported
 	}
 	if f.rsv2() || f.rsv3() {
@@ -477,24 +480,36 @@ func (f Frame) encode() net.Buffers {
 }
 
 // append one frame fragment to another
-func (f *Frame) append(o *Frame) error {
-	if o.isControl() {
-		return ErrFragmentedControlFrame
-	}
-	if f.opcode == None {
-		*f = *o
-		return nil
-	}
-	if f.fin {
-		return ErrInvalidFragmentation
-	}
-	if err := o.verifyContinuation(f.fragment()); err != nil {
-		return err
-	}
+func (f *Frame) append(o *Frame) {
 	p := make([]byte, len(f.payload)+len(o.payload))
 	copy(p, f.payload)
 	copy(p[len(f.payload):], o.payload)
 	f.payload = p
 	f.fin = o.fin
-	return nil
+}
+
+// append fragment o(other) to the existing partial frame f
+// retruns full frame, partail frame, error
+func (f *Frame) defragment(o *Frame) (*Frame, *Frame, error) {
+	if f == nil && o.fragment() == fragSingle {
+		return o, nil, nil // o is full frame
+	}
+	if o.isControl() {
+		return o, f, nil
+	}
+	if err := o.verifyContinuation(f.fragment()); err != nil {
+		return nil, nil, err // o can't be continuation of f
+	}
+	if f == nil {
+		return nil, o, nil // set f to o
+	}
+	if f.fin {
+		return nil, nil, ErrInvalidFragmentation
+	}
+
+	f.append(o)
+	if f.fin {
+		return f, nil, nil
+	}
+	return nil, f, nil
 }

@@ -47,9 +47,8 @@ func TestAsyncConnParseMessage(t *testing.T) {
 	if len(h.received) != 1 || s.closeCalls != 0 {
 		t.Fatalf("unexpected communication %d %d %s", len(h.received), s.closeCalls, s.closeError)
 	}
-	if len(c.ms.payload) != 0 ||
-		c.ms.opcode != None {
-		t.Fatal("unexpected message state")
+	if c.partialFrame != nil {
+		t.Fatal("unexpected partial frame")
 	}
 	if len(c.fs.pending) != 7 ||
 		c.fs.recvMore != 4 {
@@ -57,12 +56,18 @@ func TestAsyncConnParseMessage(t *testing.T) {
 	}
 	// push some more
 	c.Received(maskedHelloFrame[7:9])
+	if c.partialFrame != nil {
+		t.Fatal("unexpected partial frame")
+	}
 	if len(c.fs.pending) != 9 ||
 		c.fs.recvMore != 2 {
 		t.Fatalf("unexpected parsing state %d %d", len(c.fs.pending), c.fs.recvMore)
 	}
 	// push the rest
 	c.Received(maskedHelloFrame[9:])
+	if c.partialFrame != nil {
+		t.Fatal("unexpected partial frame")
+	}
 	if len(h.received) != 2 ||
 		string(h.received[1]) != "Hello" {
 		t.Fatalf("unexpected handler calls %d", len(h.received))
@@ -75,45 +80,64 @@ func TestAsyncConnParseFragmentedMessage(t *testing.T) {
 	s := testStream{}
 	c := AsyncConn{tc: &s, up: &h}
 
+	// part of fragment 1
 	c.Received(fragment1[:2])
 	if len(c.fs.pending) != 2 {
 		t.Fatalf("unexpected pending len %d", len(c.fs.pending))
 	}
+	if c.partialFrame != nil {
+		t.Fatal("unexpected partial frame")
+	}
+	// second part of fragment1
 	c.Received(fragment1[2:])
-	if len(c.ms.payload) != 1 ||
-		c.ms.opcode != Text ||
-		c.ms.prevFrameFragment != fragFirst {
+	if len(c.partialFrame.payload) != 1 ||
+		c.partialFrame.opcode != Text {
 		t.Fatal()
 	}
+	// part of ping
 	c.Received(pingFrame[:1])
 	if len(c.fs.pending) != 1 {
 		t.Fatalf("unexpected pending len %d", len(c.fs.pending))
 	}
+	// second part of ping
 	c.Received(pingFrame[1:])
+	// test that pong is sent
+	if len(s.sent) != 2 || !bytes.Equal(s.sent[0], pongFrame) {
+		t.Fatalf("unexpected downstream send %d", len(s.sent))
+	}
+
+	// part of fragment2
 	c.Received(fragment2[:3])
 	if len(c.fs.pending) != 3 {
 		t.Fatalf("unexpected pending len %d", len(c.fs.pending))
 	}
+	// rest of fragment2
 	c.Received(fragment2[3:])
-	if len(c.ms.payload) != 4 {
+	if len(c.partialFrame.payload) != 4 {
 		t.Fatalf("unexpected pending len %d", len(c.fs.pending))
 	}
+
+	// pong
 	c.Received(pongFrame[:1])
 	if len(c.fs.pending) != 1 {
 		t.Fatalf("unexpected pending len %d", len(c.fs.pending))
 	}
+	// rest of pong, first part of fragment3
 	c.Received(pongFrame[1:])
 	c.Received(fragment3[:1])
 	if len(c.fs.pending) != 1 {
 		t.Fatalf("unexpected pending len %d", len(c.fs.pending))
 	}
+	// rest of fragment 3
 	c.Received(fragment3[1:])
 
+	// finally received full frame
 	if len(h.received) != 1 ||
 		string(h.received[0]) != "Hello!" {
 		t.Fatalf("unexpected upstream communication messages: %d", len(h.received))
 	}
 
+	// replay was only one pong
 	if len(s.sent) != 2 || !bytes.Equal(s.sent[0], pongFrame) {
 		t.Fatalf("unexpected downstream send %d", len(s.sent))
 	}

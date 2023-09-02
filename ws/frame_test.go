@@ -157,43 +157,66 @@ func TestReadMore(t *testing.T) {
 	}
 }
 
-func TestAppendFrame(t *testing.T) {
-	f := Frame{opcode: None}
-	hf := frameFrom(t, helloFrame)
-	if err := f.append(hf); err != nil {
+func TestDefragmentSingleFrame(t *testing.T) {
+	hello := frameFrom(t, helloFrame)
+
+	var full *Frame = nil
+	full, partail, err := full.defragment(hello)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if !f.fin || f.opcode != Text || len(f.payload) != 5 {
+	if partail != nil {
+		t.Fatalf("should be no partial")
+	}
+	if !full.fin || full.opcode != Text || len(full.payload) != 5 {
 		t.Fatalf("unexpected frame state")
 	}
-	if err := f.append(hf); err != ErrInvalidFragmentation {
+	full, partail, err = full.defragment(hello)
+	if err != ErrInvalidFragmentation {
 		t.Fatalf("can't append to fin frame %s", err)
 	}
 }
 
-func TestAppendFrameFragmentedMessage(t *testing.T) {
-	f := Frame{opcode: None}
-	if err := f.append(frameFrom(t, fragment1)); err != nil {
+func TestDefragmentFragmentedMessage(t *testing.T) {
+	var full *Frame = nil
+	var partial *Frame = nil
+	var err error
+
+	full, partial, err = partial.defragment(frameFrom(t, fragment1))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if f.fin || len(f.payload) != 1 || f.opcode != Text ||
-		f.fragment() != fragFirst {
+	if full != nil || partial == nil {
+		t.Fatalf("unexpecte full")
+	}
+	if partial.fin || len(partial.payload) != 1 || partial.opcode != Text ||
+		partial.fragment() != fragFirst {
 		t.Fatalf("unexpected frame state")
 	}
-	if err := f.append(frameFrom(t, fragment2)); err != nil {
+
+	full, partial, err = partial.defragment(frameFrom(t, fragment2))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if f.fin || len(f.payload) != 4 || f.opcode != Text ||
-		f.fragment() != fragFirst {
+	if full != nil {
+		t.Fatalf("unexpecte full")
+	}
+	if partial.fin || len(partial.payload) != 4 || partial.opcode != Text ||
+		partial.fragment() != fragFirst {
 		t.Fatalf("unexpected frame state")
 	}
-	if err := f.append(frameFrom(t, fragment3)); err != nil {
+
+	full, partial, err = partial.defragment(frameFrom(t, fragment3))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if !f.fin ||
-		len(f.payload) != 6 ||
-		f.opcode != Text ||
-		f.fragment() != fragSingle {
+	if full == nil || partial != nil {
+		t.Fatalf("ecpected full")
+	}
+	if !full.fin ||
+		len(full.payload) != 6 ||
+		full.opcode != Text ||
+		full.fragment() != fragSingle {
 		t.Fatalf("unexpected frame state")
 	}
 }
