@@ -399,3 +399,26 @@ func (c *callbacks) count() int {
 func isMultiShot(flags uint32) bool {
 	return flags&giouring.CQEFMore > 0
 }
+
+// Dial callback
+type Dialed func(fd int, tcpConn *TcpConn, err error)
+
+func (l *Loop) Dial(addr string, dialed Dialed) error {
+	sa, err := ResolveTCPAddr(addr)
+	if err != nil {
+		return err
+	}
+	fd, err := socket(sa)
+	if err != nil {
+		return err
+	}
+	l.PrepareConnect(fd, sa, func(res int32, flags uint32, errno syscall.Errno) {
+		if errno != 0 {
+			dialed(0, nil, errno)
+		}
+		// TODO use loop to have reference to all open fds
+		conn := newTcpConn(l, nil, fd)
+		dialed(fd, conn, nil)
+	})
+	return nil
+}

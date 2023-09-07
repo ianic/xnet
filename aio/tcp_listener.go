@@ -59,7 +59,7 @@ func (l *TcpListener) accept() {
 		if errno == 0 {
 			fd := int(res)
 			// create new tcp connection and bind it with upstream layer
-			tc := newTcpConn(l.loop, l, fd)
+			tc := newTcpConn(l.loop, l.remove, fd)
 			l.accepted(fd, tc)
 			l.conns[fd] = tc
 			return
@@ -88,6 +88,15 @@ func (l *TcpListener) Port() int      { return l.port }
 
 func (l *TcpListener) remove(fd int) {
 	delete(l.conns, fd)
+}
+
+func socket(sa syscall.Sockaddr) (int, error) {
+	domain := syscall.AF_INET
+	switch sa.(type) {
+	case *syscall.SockaddrInet6:
+		domain = syscall.AF_INET6
+	}
+	return syscall.Socket(domain, syscall.SOCK_STREAM, 0)
 }
 
 func listen(sa syscall.Sockaddr) (int, int, error) {

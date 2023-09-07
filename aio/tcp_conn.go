@@ -20,15 +20,15 @@ type Upstream interface {
 }
 
 type TcpConn struct {
-	lsn           *TcpListener
-	loop          *Loop
-	fd            int
-	up            Upstream
-	shutdownError error
+	closedCallback func(int)
+	loop           *Loop
+	fd             int
+	up             Upstream
+	shutdownError  error
 }
 
-func newTcpConn(loop *Loop, lsn *TcpListener, fd int) *TcpConn {
-	return &TcpConn{loop: loop, fd: fd, lsn: lsn}
+func newTcpConn(loop *Loop, closedCallback func(int), fd int) *TcpConn {
+	return &TcpConn{loop: loop, fd: fd, closedCallback: closedCallback}
 }
 
 func (tc *TcpConn) Bind(up Upstream) {
@@ -156,7 +156,9 @@ func (tc *TcpConn) shutdown(err error) {
 			slog.Debug("tcp conn shutdown", "fd", tc.fd, "errno", errno, "res", res, "flags", flags)
 		}
 		if errno != 0 {
-			tc.lsn.remove(tc.fd)
+			if tc.closedCallback != nil {
+				tc.closedCallback(tc.fd)
+			}
 			tc.up.Closed(tc.shutdownError)
 			return
 		}
@@ -164,7 +166,9 @@ func (tc *TcpConn) shutdown(err error) {
 			if errno != 0 {
 				slog.Debug("tcp conn close", "fd", tc.fd, "errno", errno, "res", res, "flags", flags)
 			}
-			tc.lsn.remove(tc.fd)
+			if tc.closedCallback != nil {
+				tc.closedCallback(tc.fd)
+			}
 			tc.up.Closed(tc.shutdownError)
 		})
 	})
