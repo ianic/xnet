@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"syscall"
 
+	_ "unsafe"
+
 	"golang.org/x/sys/unix"
 )
 
@@ -68,13 +70,15 @@ func (l *TcpListener) accept() {
 	})
 }
 
-func (l *TcpListener) Close() {
+func (l *TcpListener) Close(shutdownConnections bool) {
 	l.loop.PrepareCancelFd(l.fd, func(res int32, flags uint32, errno syscall.Errno) {
 		if errno != 0 {
 			slog.Debug("listener cancel", "fd", l.fd, "errno", errno, "res", res, "flags", flags)
 		}
-		for _, conn := range l.conns {
-			conn.shutdown(ErrListenerClose)
+		if shutdownConnections {
+			for _, conn := range l.conns {
+				conn.shutdown(ErrListenerClose)
+			}
 		}
 	})
 }
@@ -88,13 +92,15 @@ func (l *TcpListener) remove(fd int) {
 
 func listen(sa syscall.Sockaddr) (int, int, error) {
 	port := 0
+	domain := syscall.AF_INET
 	switch v := sa.(type) {
 	case *syscall.SockaddrInet4:
 		port = v.Port
 	case *syscall.SockaddrInet6:
 		port = v.Port
+		domain = syscall.AF_INET6
 	}
-	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+	fd, err := syscall.Socket(domain, syscall.SOCK_STREAM, 0)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -144,4 +150,19 @@ func ParseIPPort(ipPort string) (syscall.Sockaddr, error) {
 		return &syscall.SockaddrInet4{Port: port, Addr: [4]byte(ip4)}, nil
 	}
 	return &syscall.SockaddrInet6{Port: port, Addr: [16]byte(ip)}, nil
+}
+
+// "www.google.com:80"
+func ResolveTCPAddr(addr string) (syscall.Sockaddr, error) {
+	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	ip := tcpAddr.IP
+	port := tcpAddr.Port
+	if ip4 := ip.To4(); ip4 != nil {
+		return &syscall.SockaddrInet4{Port: port, Addr: [4]byte(ip4)}, nil
+	}
+	return &syscall.SockaddrInet6{Port: port, Addr: [16]byte(ip)}, nil
+
 }

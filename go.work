@@ -6,3 +6,5 @@ use (
 	./ws
 	./ws/autobahn
 )
+
+replace github.com/pawelgaczynski/giouring => ../giouring
