@@ -1,10 +1,8 @@
 package aio
 
 import (
-	"fmt"
 	"log/slog"
 	"net"
-	"strconv"
 	"syscall"
 
 	_ "unsafe"
@@ -32,14 +30,14 @@ func (l *TCPListener) accept() {
 			return
 		}
 		if err.Temporary() {
-			l.loop.PrepareMultishotAccept(l.fd, cb)
+			l.loop.prepareMultishotAccept(l.fd, cb)
 			return
 		}
 		if !err.Canceled() {
 			slog.Debug("listener accept", "fd", l.fd, "errno", err, "res", res, "flags", flags)
 		}
 	}
-	l.loop.PrepareMultishotAccept(l.fd, cb)
+	l.loop.prepareMultishotAccept(l.fd, cb)
 }
 
 func (l *TCPListener) Close() {
@@ -47,7 +45,7 @@ func (l *TCPListener) Close() {
 }
 
 func (l *TCPListener) close(shutdownConnections bool) {
-	l.loop.PrepareCancelFd(l.fd, func(res int32, flags uint32, err *ErrErrno) {
+	l.loop.prepareCancelFd(l.fd, func(res int32, flags uint32, err *ErrErrno) {
 		if err != nil {
 			slog.Debug("listener cancel", "fd", l.fd, "err", err, "res", res, "flags", flags)
 		}
@@ -59,9 +57,6 @@ func (l *TCPListener) close(shutdownConnections bool) {
 		delete(l.loop.listeners, l.fd)
 	})
 }
-
-func (l *TCPListener) ConnCount() int { return len(l.connections) }
-func (l *TCPListener) Port() int      { return l.port }
 
 func socket(sa syscall.Sockaddr) (int, error) {
 	domain := syscall.AF_INET
@@ -115,27 +110,12 @@ func listen(sa syscall.Sockaddr) (int, int, error) {
 	return fd, port, nil
 }
 
-func ParseIPPort(ipPort string) (syscall.Sockaddr, error) {
-	ipStr, portStr, err := net.SplitHostPort(ipPort)
-	if err != nil {
-		return nil, err
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		return nil, err
-	}
-	ip := net.ParseIP(ipStr)
-	if ip == nil {
-		return nil, fmt.Errorf("net.ParseIP failed on %s", ipStr)
-	}
-	if ip4 := ip.To4(); ip4 != nil {
-		return &syscall.SockaddrInet4{Port: port, Addr: [4]byte(ip4)}, nil
-	}
-	return &syscall.SockaddrInet6{Port: port, Addr: [16]byte(ip)}, nil
-}
-
+// resolveTCPAddr converts string address to syscall.Scokaddr interface used in
+// other syscall calls.
 // "www.google.com:80"
-func ResolveTCPAddr(addr string) (syscall.Sockaddr, error) {
+// "[::1]:0"
+// "127.0.0.1:1234"
+func resolveTCPAddr(addr string) (syscall.Sockaddr, error) {
 	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
 		return nil, err
@@ -146,5 +126,4 @@ func ResolveTCPAddr(addr string) (syscall.Sockaddr, error) {
 		return &syscall.SockaddrInet4{Port: port, Addr: [4]byte(ip4)}, nil
 	}
 	return &syscall.SockaddrInet6{Port: port, Addr: [16]byte(ip)}, nil
-
 }

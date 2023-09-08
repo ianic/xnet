@@ -65,14 +65,14 @@ func TestTCPListener(t *testing.T) {
 
 	data := testRandomBuf(t, 1024*4)
 	go func() {
-		testSender(t, fmt.Sprintf("[::1]:%d", lsn.Port()), data)
+		testSender(t, fmt.Sprintf("[::1]:%d", lsn.port), data)
 	}()
 
 	// accept connection
-	loop.RunOnce()
+	loop.runOnce()
 	lsn.close(false)
 	// run until connection is closed
-	loop.RunUntilDone()
+	loop.runUntilDone()
 
 	require.True(t, len(conn.received) >= 4)
 	testRequireEqualBuffers(t, data, conn.received)
@@ -101,7 +101,7 @@ func TestTCPConnectSend(t *testing.T) {
 			tc.Bind(closer)
 			tc.Send(data)
 		})
-		loop.RunUntilDone()
+		loop.runUntilDone()
 		close(loopDone)
 	}()
 

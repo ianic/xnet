@@ -59,10 +59,10 @@ func New(opt Options) (*Loop, error) {
 	return l, nil
 }
 
-// RunOnce performs one loop run.
+// runOnce performs one loop run.
 // Submits all prepared operations to the kernel and waits for at least one
 // completed operation by the kernel.
-func (l *Loop) RunOnce() error {
+func (l *Loop) runOnce() error {
 	if err := l.submitAndWait(1); err != nil {
 		return err
 	}
@@ -70,8 +70,8 @@ func (l *Loop) RunOnce() error {
 	return nil
 }
 
-// RunUntilDone runs loop until all prepared operations are finished.
-func (l *Loop) RunUntilDone() error {
+// runUntilDone runs loop until all prepared operations are finished.
+func (l *Loop) runUntilDone() error {
 	for {
 		if l.callbacks.count() == 0 {
 			if len(l.connections) > 0 || len(l.listeners) > 0 {
@@ -79,7 +79,7 @@ func (l *Loop) RunUntilDone() error {
 			}
 			return nil
 		}
-		if err := l.RunOnce(); err != nil {
+		if err := l.runOnce(); err != nil {
 			return err
 		}
 	}
@@ -91,12 +91,12 @@ func (l *Loop) RunUntilDone() error {
 // Loop will wait for all operations to finish.
 func (l *Loop) Run(ctx context.Context) error {
 	// run until ctx is done
-	if err := l.RunCtx(ctx, time.Millisecond*333); err != nil {
+	if err := l.runCtx(ctx, time.Millisecond*333); err != nil {
 		return err
 	}
 	l.closePendingConnections()
 	// run loop until all operations finishes
-	if err := l.RunUntilDone(); err != nil {
+	if err := l.runUntilDone(); err != nil {
 		return err
 	}
 	return nil
@@ -111,9 +111,9 @@ func (l *Loop) closePendingConnections() {
 	}
 }
 
-// RunCtx runs loop until context is canceled.
+// runCtx runs loop until context is canceled.
 // Checks context every `timeout`.
-func (l *Loop) RunCtx(ctx context.Context, timeout time.Duration) error {
+func (l *Loop) runCtx(ctx context.Context, timeout time.Duration) error {
 	ts := syscall.NsecToTimespec(int64(timeout))
 	done := func() bool {
 		select {
@@ -232,21 +232,21 @@ func (l *Loop) prepare(op operation) {
 	op(sqe)
 }
 
-func (l *Loop) PrepareMultishotAccept(fd int, cb completionCallback) {
+func (l *Loop) prepareMultishotAccept(fd int, cb completionCallback) {
 	l.prepare(func(sqe *giouring.SubmissionQueueEntry) {
 		sqe.PrepareMultishotAccept(fd, 0, 0, 0)
 		l.callbacks.set(sqe, cb)
 	})
 }
 
-func (l *Loop) PrepareCancelFd(fd int, cb completionCallback) {
+func (l *Loop) prepareCancelFd(fd int, cb completionCallback) {
 	l.prepare(func(sqe *giouring.SubmissionQueueEntry) {
 		sqe.PrepareCancelFd(fd, 0)
 		l.callbacks.set(sqe, cb)
 	})
 }
 
-func (l *Loop) PrepareShutdown(fd int, cb completionCallback) {
+func (l *Loop) prepareShutdown(fd int, cb completionCallback) {
 	l.prepare(func(sqe *giouring.SubmissionQueueEntry) {
 		const SHUT_RDWR = 2
 		sqe.PrepareShutdown(fd, SHUT_RDWR)
@@ -254,14 +254,14 @@ func (l *Loop) PrepareShutdown(fd int, cb completionCallback) {
 	})
 }
 
-func (l *Loop) PrepareClose(fd int, cb completionCallback) {
+func (l *Loop) prepareClose(fd int, cb completionCallback) {
 	l.prepare(func(sqe *giouring.SubmissionQueueEntry) {
 		sqe.PrepareClose(fd)
 		l.callbacks.set(sqe, cb)
 	})
 }
 
-func (l *Loop) PrepareSend(fd int, buf []byte, cb completionCallback) {
+func (l *Loop) prepareSend(fd int, buf []byte, cb completionCallback) {
 	l.prepare(func(sqe *giouring.SubmissionQueueEntry) {
 		sqe.PrepareSend(fd, uintptr(unsafe.Pointer(&buf[0])), uint32(len(buf)), 0)
 		l.callbacks.set(sqe, cb)
@@ -271,7 +271,7 @@ func (l *Loop) PrepareSend(fd int, buf []byte, cb completionCallback) {
 // references from std lib:
 // https://github.com/golang/go/blob/140266fe7521bf75bf0037f12265190213cc8e7d/src/internal/poll/writev.go#L16
 // https://github.com/golang/go/blob/140266fe7521bf75bf0037f12265190213cc8e7d/src/internal/poll/fd_writev_unix.go#L20
-func (l *Loop) PrepareWritev(fd int, buffers [][]byte, cb completionCallback) {
+func (l *Loop) prepareWritev(fd int, buffers [][]byte, cb completionCallback) {
 	l.prepare(func(sqe *giouring.SubmissionQueueEntry) {
 		var iovecs []syscall.Iovec
 		for _, buf := range buffers {
@@ -287,7 +287,7 @@ func (l *Loop) PrepareWritev(fd int, buffers [][]byte, cb completionCallback) {
 }
 
 // Multishot, provided buffers recv
-func (l *Loop) PrepareRecv(fd int, cb completionCallback) {
+func (l *Loop) prepareRecv(fd int, cb completionCallback) {
 	l.prepare(func(sqe *giouring.SubmissionQueueEntry) {
 		sqe.PrepareRecvMultishot(fd, 0, 0, 0)
 		sqe.Flags = giouring.SqeBufferSelect
@@ -296,20 +296,13 @@ func (l *Loop) PrepareRecv(fd int, cb completionCallback) {
 	})
 }
 
-func (l *Loop) PrepareConnect(fd int, so syscall.Sockaddr, cb completionCallback) {
+func (l *Loop) prepareConnect(fd int, so syscall.Sockaddr, cb completionCallback) {
 	l.prepare(func(sqe *giouring.SubmissionQueueEntry) {
 		if err := sqe.PrepareConnect(fd, so); err != nil {
 			panic(err) // only if tcp port is out of range
 		}
 		l.callbacks.set(sqe, cb)
 	})
-}
-
-func cqeErrno(c *giouring.CompletionQueueEvent) syscall.Errno {
-	if c.Res > -4096 && c.Res < 0 {
-		return syscall.Errno(-c.Res)
-	}
-	return 0
 }
 
 func cqeErr(c *giouring.CompletionQueueEvent) *ErrErrno {
@@ -447,7 +440,7 @@ func isMultiShot(flags uint32) bool {
 type Dialed func(fd int, tcpConn *TCPConn, err error)
 
 func (l *Loop) Dial(addr string, dialed Dialed) error {
-	sa, err := ResolveTCPAddr(addr)
+	sa, err := resolveTCPAddr(addr)
 	if err != nil {
 		return err
 	}
@@ -455,7 +448,7 @@ func (l *Loop) Dial(addr string, dialed Dialed) error {
 	if err != nil {
 		return err
 	}
-	l.PrepareConnect(fd, sa, func(res int32, flags uint32, err *ErrErrno) {
+	l.prepareConnect(fd, sa, func(res int32, flags uint32, err *ErrErrno) {
 		if err != nil {
 			dialed(0, nil, err)
 		}
@@ -473,7 +466,7 @@ type Accepted func(fd int, tcpConn *TCPConn)
 // ip4:  "127.0.0.1:8080",
 // ip6: "[::1]:80"
 func (l *Loop) Listen(addr string, accepted Accepted) (*TCPListener, error) {
-	sa, err := ResolveTCPAddr(addr)
+	sa, err := resolveTCPAddr(addr)
 	if err != nil {
 		return nil, err
 	}

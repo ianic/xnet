@@ -59,10 +59,10 @@ func (tc *TCPConn) Send(data []byte) {
 			return
 		}
 		// send rest of the data
-		tc.loop.PrepareSend(tc.fd, data[nn:], cb)
+		tc.loop.prepareSend(tc.fd, data[nn:], cb)
 		// new send prepared
 	}
-	tc.loop.PrepareSend(tc.fd, data, cb)
+	tc.loop.prepareSend(tc.fd, data, cb)
 }
 
 func (tc *TCPConn) SendBuffers(buffers [][]byte) {
@@ -79,10 +79,10 @@ func (tc *TCPConn) SendBuffers(buffers [][]byte) {
 			return
 		}
 		// send rest of the data
-		tc.loop.PrepareWritev(tc.fd, buffers, cb)
+		tc.loop.prepareWritev(tc.fd, buffers, cb)
 		// new send prepared
 	}
-	tc.loop.PrepareWritev(tc.fd, buffers, cb)
+	tc.loop.prepareWritev(tc.fd, buffers, cb)
 }
 
 // consume removes data from a slice of byte slices, for writev.
@@ -113,7 +113,7 @@ func (tc *TCPConn) recvLoop() {
 		if err != nil {
 			if err.Temporary() {
 				slog.Debug("tcp conn read temporary error", "error", err.Error())
-				tc.loop.PrepareRecv(tc.fd, cb)
+				tc.loop.prepareRecv(tc.fd, cb)
 				return
 			}
 			if !err.ConnectionReset() {
@@ -134,10 +134,10 @@ func (tc *TCPConn) recvLoop() {
 			// io_uring can terminate multishot recv when cqe is full
 			// need to restart it then
 			// ref: https://lore.kernel.org/lkml/20220630091231.1456789-3-dylany@fb.com/T/#re5daa4d5b6e4390ecf024315d9693e5d18d61f10
-			tc.loop.PrepareRecv(tc.fd, cb)
+			tc.loop.prepareRecv(tc.fd, cb)
 		}
 	}
-	tc.loop.PrepareRecv(tc.fd, cb)
+	tc.loop.prepareRecv(tc.fd, cb)
 }
 
 // shutdown tcp (both) then close fd
@@ -149,7 +149,7 @@ func (tc *TCPConn) shutdown(err error) {
 		return
 	}
 	tc.shutdownError = err
-	tc.loop.PrepareShutdown(tc.fd, func(res int32, flags uint32, err *ErrErrno) {
+	tc.loop.prepareShutdown(tc.fd, func(res int32, flags uint32, err *ErrErrno) {
 		if err != nil {
 			if !err.ConnectionReset() {
 				slog.Debug("tcp conn shutdown", "fd", tc.fd, "err", err, "res", res, "flags", flags)
@@ -160,7 +160,7 @@ func (tc *TCPConn) shutdown(err error) {
 			tc.up.Closed(tc.shutdownError)
 			return
 		}
-		tc.loop.PrepareClose(tc.fd, func(res int32, flags uint32, err *ErrErrno) {
+		tc.loop.prepareClose(tc.fd, func(res int32, flags uint32, err *ErrErrno) {
 			if err != nil {
 				slog.Debug("tcp conn close", "fd", tc.fd, "errno", err, "res", res, "flags", flags)
 			}

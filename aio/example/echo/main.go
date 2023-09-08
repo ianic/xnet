@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log/slog"
 
 	"github.com/ianic/xnet/aio"
@@ -41,10 +40,6 @@ func run(ipPort string) error {
 	ctx := signal.InterruptContext()
 	if err := loop.Run(ctx); err != nil {
 		return err
-	}
-	// check cleanup
-	if cc := lsn.ConnCount(); cc != 0 {
-		panic(fmt.Sprintf("listener conn count should be 0 actual %d", cc))
 	}
 	return nil
 }

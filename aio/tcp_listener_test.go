@@ -5,17 +5,17 @@ import (
 	"testing"
 )
 
-func TestParseIPPort4(t *testing.T) {
+func TestResolveTCPAddr4(t *testing.T) {
 	cases := []struct {
-		ipPort string
-		ip     [4]byte
-		port   int
+		addr string
+		ip   [4]byte
+		port int
 	}{
 		{"127.0.0.1:8080", [4]byte{127, 0, 0, 1}, 8080},
 		{"4.4.4.4:0", [4]byte{4, 4, 4, 4}, 0},
 	}
 	for _, c := range cases {
-		so, err := ParseIPPort(c.ipPort)
+		so, err := resolveTCPAddr(c.addr)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -29,16 +29,16 @@ func TestParseIPPort4(t *testing.T) {
 	}
 }
 
-func TestParseIPPort16(t *testing.T) {
+func TestResolveTCPAddr6(t *testing.T) {
 	cases := []struct {
-		ipPort string
-		ip     [16]byte
-		port   int
+		addr string
+		ip   [16]byte
+		port int
 	}{
 		{"[2001:0000:130F:0000:0000:09C0:876A:130B]:1234", [16]byte{32, 1, 0, 0, 19, 15, 0, 0, 0, 0, 9, 192, 135, 106, 19, 11}, 1234},
 	}
 	for _, c := range cases {
-		so, err := ParseIPPort(c.ipPort)
+		so, err := resolveTCPAddr(c.addr)
 		if err != nil {
 			t.Fatal(err)
 		}
