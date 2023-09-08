@@ -20,16 +20,23 @@ type Upstream interface {
 }
 
 type TcpConn struct {
-	closedCallback func(int)
+	closedCallback func()
 	loop           *Loop
 	fd             int
 	up             Upstream
 	shutdownError  error
 }
 
-func newTcpConn(loop *Loop, closedCallback func(int), fd int) *TcpConn {
+func newTcpConn(loop *Loop, closedCallback func(), fd int) *TcpConn {
 	return &TcpConn{loop: loop, fd: fd, closedCallback: closedCallback}
 }
+
+// Binder function will be called when new tcp connection is accepted. That
+// connects newly created connection and upstream handler. It's up to the
+// upstream handler to call bind when ready. On in any other time when it need
+// to change upstream layer. For example during after websocket handshake layer
+// can be change from one which were handling handshake to one which will handle
+// websocket frames.
 
 func (tc *TcpConn) Bind(up Upstream) {
 	startRecv := tc.up == nil
@@ -157,7 +164,7 @@ func (tc *TcpConn) shutdown(err error) {
 		}
 		if errno != 0 {
 			if tc.closedCallback != nil {
-				tc.closedCallback(tc.fd)
+				tc.closedCallback()
 			}
 			tc.up.Closed(tc.shutdownError)
 			return
@@ -167,7 +174,7 @@ func (tc *TcpConn) shutdown(err error) {
 				slog.Debug("tcp conn close", "fd", tc.fd, "errno", errno, "res", res, "flags", flags)
 			}
 			if tc.closedCallback != nil {
-				tc.closedCallback(tc.fd)
+				tc.closedCallback()
 			}
 			tc.up.Closed(tc.shutdownError)
 		})

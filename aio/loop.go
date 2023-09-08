@@ -26,6 +26,9 @@ type Loop struct {
 	callbacks callbacks
 	buffers   providedBuffers
 	pending   []operation
+
+	listeners   map[int]*TcpListener
+	connections map[int]*TcpConn
 }
 
 type Options struct {
@@ -45,7 +48,11 @@ func New(opt Options) (*Loop, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &Loop{ring: ring}
+	l := &Loop{
+		ring:        ring,
+		listeners:   make(map[int]*TcpListener),
+		connections: make(map[int]*TcpConn),
+	}
 	l.callbacks.init()
 	if err := l.buffers.setup(ring, opt.RecvBuffersCount, opt.RecvBufferLen); err != nil {
 		return nil, err
@@ -65,6 +72,9 @@ func (l *Loop) RunOnce() error {
 func (l *Loop) RunUntilDone() error {
 	for {
 		if l.callbacks.count() == 0 {
+			if len(l.connections) > 0 || len(l.listeners) > 0 {
+				panic("unclean shutdown")
+			}
 			return nil
 		}
 		if err := l.RunOnce(); err != nil {
@@ -416,9 +426,36 @@ func (l *Loop) Dial(addr string, dialed Dialed) error {
 		if errno != 0 {
 			dialed(0, nil, errno)
 		}
-		// TODO use loop to have reference to all open fds
-		conn := newTcpConn(l, nil, fd)
+
+		conn := newTcpConn(l, func() { delete(l.connections, fd) }, fd)
+		l.connections[fd] = conn
 		dialed(fd, conn, nil)
 	})
 	return nil
+}
+
+// callback fired when new connection is accepted by listener
+type Accepted func(fd int, tcpConn *TcpConn)
+
+// ip4:  "127.0.0.1:8080",
+// ip6: "[::1]:80"
+func (l *Loop) Listen(addr string, accepted Accepted) (*TcpListener, error) {
+	sa, err := ResolveTCPAddr(addr)
+	if err != nil {
+		return nil, err
+	}
+	fd, port, err := listen(sa)
+	if err != nil {
+		return nil, err
+	}
+	ln := &TcpListener{
+		fd:          fd,
+		port:        port,
+		loop:        l,
+		accepted:    accepted,
+		connections: make(map[int]*TcpConn),
+	}
+	l.listeners[fd] = ln
+	ln.accept()
+	return ln, nil
 }

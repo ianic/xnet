@@ -12,46 +12,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// callback fired when new connection is accepted by listener
-type Accepted func(fd int, tcpConn *TcpConn)
-
 type TcpListener struct {
-	loop     *Loop
-	fd       int
-	port     int
-	accepted Accepted
-	conns    map[int]*TcpConn
-}
-
-// NewTcpListener
-// ipPort examples:
-// ip4:  "127.0.0.1:8080",
-// ip16: "[::1]:80"
-//
-// Binder function will be called when new tcp connection is accepted. That
-// connects newly created connection and upstream handler. It's up to the
-// upstream handler to call bind when ready. On in any other time when it need
-// to change upstream layer. For example during after websocket handshake layer
-// can be change from one which were handling handshake to one which will handle
-// websocket frames.
-func NewTcpListener(loop *Loop, ipPort string, accepted Accepted) (*TcpListener, error) {
-	so, err := ParseIPPort(ipPort)
-	if err != nil {
-		return nil, err
-	}
-	fd, port, err := listen(so)
-	if err != nil {
-		return nil, err
-	}
-	l := &TcpListener{
-		fd:       fd,
-		port:     port,
-		loop:     loop,
-		accepted: accepted,
-		conns:    make(map[int]*TcpConn),
-	}
-	l.accept()
-	return l, nil
+	loop        *Loop
+	fd          int
+	port        int
+	accepted    Accepted
+	connections map[int]*TcpConn
 }
 
 func (l *TcpListener) accept() {
@@ -59,9 +25,9 @@ func (l *TcpListener) accept() {
 		if errno == 0 {
 			fd := int(res)
 			// create new tcp connection and bind it with upstream layer
-			tc := newTcpConn(l.loop, l.remove, fd)
+			tc := newTcpConn(l.loop, func() { delete(l.connections, fd) }, fd)
 			l.accepted(fd, tc)
-			l.conns[fd] = tc
+			l.connections[fd] = tc
 			return
 		}
 		if errno != syscall.ECANCELED {
@@ -70,25 +36,26 @@ func (l *TcpListener) accept() {
 	})
 }
 
-func (l *TcpListener) Close(shutdownConnections bool) {
+func (l *TcpListener) Close() {
+	l.close(true)
+}
+
+func (l *TcpListener) close(shutdownConnections bool) {
 	l.loop.PrepareCancelFd(l.fd, func(res int32, flags uint32, errno syscall.Errno) {
 		if errno != 0 {
 			slog.Debug("listener cancel", "fd", l.fd, "errno", errno, "res", res, "flags", flags)
 		}
 		if shutdownConnections {
-			for _, conn := range l.conns {
+			for _, conn := range l.connections {
 				conn.shutdown(ErrListenerClose)
 			}
 		}
+		delete(l.loop.listeners, l.fd)
 	})
 }
 
-func (l *TcpListener) ConnCount() int { return len(l.conns) }
+func (l *TcpListener) ConnCount() int { return len(l.connections) }
 func (l *TcpListener) Port() int      { return l.port }
-
-func (l *TcpListener) remove(fd int) {
-	delete(l.conns, fd)
-}
 
 func socket(sa syscall.Sockaddr) (int, error) {
 	domain := syscall.AF_INET

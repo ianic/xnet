@@ -43,7 +43,7 @@ func run(ipPort string) error {
 	}
 
 	// start tcp listener
-	lsn, err := aio.NewTcpListener(loop, ipPort, tcpAccepted)
+	lsn, err := loop.Listen(ipPort, tcpAccepted)
 	if err != nil {
 		return err
 	}

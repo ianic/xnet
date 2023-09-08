@@ -58,7 +58,7 @@ func TestTCPListener(t *testing.T) {
 		tc.Bind(&conn)
 	}
 	// start listener
-	lsn, err := NewTcpListener(loop, "[::1]:0", tcpAccepted)
+	lsn, err := loop.Listen("[::1]:0", tcpAccepted)
 	require.NoError(t, err)
 	// t.Logf("tcp listener started at port %d", lsn.Port())
 
@@ -69,7 +69,7 @@ func TestTCPListener(t *testing.T) {
 
 	// accept connection
 	loop.RunOnce()
-	lsn.Close(false)
+	lsn.close(false)
 	// run until connection is closed
 	loop.RunUntilDone()
 
@@ -88,6 +88,7 @@ func TestTCPConnectSend(t *testing.T) {
 
 	data := testRandomBuf(t, 4096)
 	closer := &testCloserConn{}
+	loopDone := make(chan struct{})
 	go func() {
 		loop, err := New(DefaultOptions)
 		require.NoError(t, err)
@@ -100,6 +101,7 @@ func TestTCPConnectSend(t *testing.T) {
 			tc.Send(data)
 		})
 		loop.RunUntilDone()
+		close(loopDone)
 	}()
 
 	var readBuffer []byte
@@ -120,6 +122,7 @@ func TestTCPConnectSend(t *testing.T) {
 	listen.Close()
 
 	require.Equal(t, data, readBuffer)
+	<-loopDone
 	require.True(t, closer.closed)
 }
 
