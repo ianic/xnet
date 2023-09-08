@@ -27,7 +27,7 @@ func run(ipPort string) error {
 	defer loop.Close()
 
 	// called when tcp listener accepts tcp connection
-	tcpAccepted := func(fd int, tc *aio.TcpConn) {
+	tcpAccepted := func(fd int, tc *aio.TCPConn) {
 		tc.Bind(&conn{fd: fd, sender: tc})
 	}
 

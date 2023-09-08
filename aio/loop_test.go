@@ -53,7 +53,7 @@ func TestTCPListener(t *testing.T) {
 
 	conn := testConn{}
 	// called when tcp listener accepts tcp connection
-	tcpAccepted := func(fd int, tc *TcpConn) {
+	tcpAccepted := func(fd int, tc *TCPConn) {
 		// t.Logf("accepted fd %d\n", fd)
 		tc.Bind(&conn)
 	}
@@ -94,7 +94,7 @@ func TestTCPConnectSend(t *testing.T) {
 		require.NoError(t, err)
 		defer loop.Close()
 
-		loop.Dial(addr, func(fd int, tc *TcpConn, err error) {
+		loop.Dial(addr, func(fd int, tc *TCPConn, err error) {
 			require.NoError(t, err)
 			closer.tc = tc
 			tc.Bind(closer)
@@ -123,6 +123,7 @@ func TestTCPConnectSend(t *testing.T) {
 
 	require.Equal(t, data, readBuffer)
 	<-loopDone
+
 	require.True(t, closer.closed)
 }
 
@@ -150,7 +151,7 @@ func (c *testConn) Closed(error) {
 }
 
 type testCloserConn struct {
-	tc     *TcpConn
+	tc     *TCPConn
 	closed bool
 }
 

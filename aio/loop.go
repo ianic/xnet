@@ -27,8 +27,8 @@ type Loop struct {
 	buffers   providedBuffers
 	pending   []operation
 
-	listeners   map[int]*TcpListener
-	connections map[int]*TcpConn
+	listeners   map[int]*TCPListener
+	connections map[int]*TCPConn
 }
 
 type Options struct {
@@ -50,8 +50,8 @@ func New(opt Options) (*Loop, error) {
 	}
 	l := &Loop{
 		ring:        ring,
-		listeners:   make(map[int]*TcpListener),
-		connections: make(map[int]*TcpConn),
+		listeners:   make(map[int]*TCPListener),
+		connections: make(map[int]*TCPConn),
 	}
 	l.callbacks.init()
 	if err := l.buffers.setup(ring, opt.RecvBuffersCount, opt.RecvBufferLen); err != nil {
@@ -411,7 +411,7 @@ func isMultiShot(flags uint32) bool {
 }
 
 // Dial callback
-type Dialed func(fd int, tcpConn *TcpConn, err error)
+type Dialed func(fd int, tcpConn *TCPConn, err error)
 
 func (l *Loop) Dial(addr string, dialed Dialed) error {
 	sa, err := ResolveTCPAddr(addr)
@@ -435,11 +435,11 @@ func (l *Loop) Dial(addr string, dialed Dialed) error {
 }
 
 // callback fired when new connection is accepted by listener
-type Accepted func(fd int, tcpConn *TcpConn)
+type Accepted func(fd int, tcpConn *TCPConn)
 
 // ip4:  "127.0.0.1:8080",
 // ip6: "[::1]:80"
-func (l *Loop) Listen(addr string, accepted Accepted) (*TcpListener, error) {
+func (l *Loop) Listen(addr string, accepted Accepted) (*TCPListener, error) {
 	sa, err := ResolveTCPAddr(addr)
 	if err != nil {
 		return nil, err
@@ -448,12 +448,12 @@ func (l *Loop) Listen(addr string, accepted Accepted) (*TcpListener, error) {
 	if err != nil {
 		return nil, err
 	}
-	ln := &TcpListener{
+	ln := &TCPListener{
 		fd:          fd,
 		port:        port,
 		loop:        l,
 		accepted:    accepted,
-		connections: make(map[int]*TcpConn),
+		connections: make(map[int]*TCPConn),
 	}
 	l.listeners[fd] = ln
 	ln.accept()

@@ -19,7 +19,7 @@ type Upstream interface {
 	Sent()
 }
 
-type TcpConn struct {
+type TCPConn struct {
 	closedCallback func()
 	loop           *Loop
 	fd             int
@@ -27,18 +27,16 @@ type TcpConn struct {
 	shutdownError  error
 }
 
-func newTcpConn(loop *Loop, closedCallback func(), fd int) *TcpConn {
-	return &TcpConn{loop: loop, fd: fd, closedCallback: closedCallback}
+func newTcpConn(loop *Loop, closedCallback func(), fd int) *TCPConn {
+	return &TCPConn{loop: loop, fd: fd, closedCallback: closedCallback}
 }
 
-// Binder function will be called when new tcp connection is accepted. That
-// connects newly created connection and upstream handler. It's up to the
+// Bind connects this connection and upstream handler. It's up to the
 // upstream handler to call bind when ready. On in any other time when it need
 // to change upstream layer. For example during after websocket handshake layer
 // can be change from one which were handling handshake to one which will handle
 // websocket frames.
-
-func (tc *TcpConn) Bind(up Upstream) {
+func (tc *TCPConn) Bind(up Upstream) {
 	startRecv := tc.up == nil
 	tc.up = up
 	if startRecv {
@@ -47,7 +45,7 @@ func (tc *TcpConn) Bind(up Upstream) {
 }
 
 // TODO: add correlation id (userdata) for send/sent connecting
-func (tc *TcpConn) Send(data []byte) {
+func (tc *TCPConn) Send(data []byte) {
 	nn := 0 // number of bytes sent
 	var cb completionCallback
 	cb = func(res int32, flags uint32, errno syscall.Errno) {
@@ -68,7 +66,7 @@ func (tc *TcpConn) Send(data []byte) {
 	tc.loop.PrepareSend(tc.fd, data, cb)
 }
 
-func (tc *TcpConn) SendBuffers(buffers [][]byte) {
+func (tc *TCPConn) SendBuffers(buffers [][]byte) {
 	var cb completionCallback
 	cb = func(res int32, flags uint32, errno syscall.Errno) {
 		n := int(res)
@@ -104,19 +102,19 @@ func consume(v *[][]byte, n int) {
 	}
 }
 
-func (tc *TcpConn) Close() {
+func (tc *TCPConn) Close() {
 	tc.shutdown(ErrUpstreamClose)
 }
 
 // Allows upper layer to change connection handler.
 // Useful in websocket handshake for example.
-func (tc *TcpConn) SetUpstream(conn Upstream) {
+func (tc *TCPConn) SetUpstream(conn Upstream) {
 	tc.up = conn
 }
 
 // recvLoop starts multishot recv on fd
 // Will receive on fd until error occurs.
-func (tc *TcpConn) recvLoop() {
+func (tc *TCPConn) recvLoop() {
 	var cb completionCallback
 	cb = func(res int32, flags uint32, errno syscall.Errno) {
 		if errno > 0 {
@@ -150,7 +148,7 @@ func (tc *TcpConn) recvLoop() {
 }
 
 // shutdown tcp (both) then close fd
-func (tc *TcpConn) shutdown(err error) {
+func (tc *TCPConn) shutdown(err error) {
 	if err == nil {
 		panic("tcp conn missing shutdown reason")
 	}

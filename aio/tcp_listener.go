@@ -12,15 +12,15 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type TcpListener struct {
+type TCPListener struct {
 	loop        *Loop
 	fd          int
 	port        int
 	accepted    Accepted
-	connections map[int]*TcpConn
+	connections map[int]*TCPConn
 }
 
-func (l *TcpListener) accept() {
+func (l *TCPListener) accept() {
 	l.loop.PrepareMultishotAccept(l.fd, func(res int32, flags uint32, errno syscall.Errno) {
 		if errno == 0 {
 			fd := int(res)
@@ -36,11 +36,11 @@ func (l *TcpListener) accept() {
 	})
 }
 
-func (l *TcpListener) Close() {
+func (l *TCPListener) Close() {
 	l.close(true)
 }
 
-func (l *TcpListener) close(shutdownConnections bool) {
+func (l *TCPListener) close(shutdownConnections bool) {
 	l.loop.PrepareCancelFd(l.fd, func(res int32, flags uint32, errno syscall.Errno) {
 		if errno != 0 {
 			slog.Debug("listener cancel", "fd", l.fd, "errno", errno, "res", res, "flags", flags)
@@ -54,8 +54,8 @@ func (l *TcpListener) close(shutdownConnections bool) {
 	})
 }
 
-func (l *TcpListener) ConnCount() int { return len(l.connections) }
-func (l *TcpListener) Port() int      { return l.port }
+func (l *TCPListener) ConnCount() int { return len(l.connections) }
+func (l *TCPListener) Port() int      { return l.port }
 
 func socket(sa syscall.Sockaddr) (int, error) {
 	domain := syscall.AF_INET

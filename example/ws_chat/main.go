@@ -28,13 +28,13 @@ func run(ipPort string) error {
 
 	// called when ws handshake is successful
 	// upgrades tcp connection to websocket connection
-	wsAccepted := func(fd int, tc *aio.TcpConn, wc *ws.AsyncConn) {
+	wsAccepted := func(fd int, tc *aio.TCPConn, wc *ws.AsyncConn) {
 		cli := chat.newClient(fd, wc)
 		tc.Bind(wc)  // rebind tcp connection from handshake to websocket
 		wc.Bind(cli) // bind websocket to upstream chat client
 	}
 	// called when tcp listener accepts tcp connection
-	tcpAccepted := func(fd int, tc *aio.TcpConn) {
+	tcpAccepted := func(fd int, tc *aio.TCPConn) {
 		tc.Bind(&handshake{
 			fd:         fd,
 			tcpConn:    tc,
@@ -57,8 +57,8 @@ func run(ipPort string) error {
 
 type handshake struct {
 	fd         int
-	tcpConn    *aio.TcpConn
-	wsAccepted func(int, *aio.TcpConn, *ws.AsyncConn)
+	tcpConn    *aio.TCPConn
+	wsAccepted func(int, *aio.TCPConn, *ws.AsyncConn)
 }
 
 func (h *handshake) Received(data []byte) {
