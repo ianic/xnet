@@ -39,7 +39,7 @@ func run(ipPort string) error {
 	slog.Debug("started server", "addr", ipPort, "port", lsn.Port())
 	// run util interrupted
 	ctx := signal.InterruptContext()
-	if err := loop.Run(ctx, func() { lsn.Close() }); err != nil {
+	if err := loop.Run(ctx); err != nil {
 		return err
 	}
 	// check cleanup

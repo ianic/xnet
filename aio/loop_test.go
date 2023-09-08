@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"syscall"
 	"testing"
 	"time"
 
@@ -186,4 +187,11 @@ func testRandomBuf(t *testing.T, size int) []byte {
 	_, err = io.ReadFull(f, buf)
 	require.NoError(t, err)
 	return buf
+}
+
+func TestErrnoTemporary(t *testing.T) {
+	require.True(t, (&ErrErrno{Errno: syscall.EINTR}).Temporary())
+	require.True(t, TemporaryError(syscall.EINTR))
+	require.True(t, TemporaryError(syscall.ETIME))
+	require.True(t, TemporaryError(syscall.ENOBUFS))
 }

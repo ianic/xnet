@@ -10,7 +10,6 @@ import (
 	"unsafe"
 
 	"github.com/pawelgaczynski/giouring"
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -18,7 +17,7 @@ const (
 	buffersGroupID = 0 // currently using only 1 provided buffer group
 )
 
-type completionCallback = func(res int32, flags uint32, errno syscall.Errno)
+type completionCallback = func(res int32, flags uint32, err *ErrErrno)
 type operation = func(*giouring.SubmissionQueueEntry)
 
 type Loop struct {
@@ -60,6 +59,9 @@ func New(opt Options) (*Loop, error) {
 	return l, nil
 }
 
+// RunOnce performs one loop run.
+// Submits all prepared operations to the kernel and waits for at least one
+// completed operation by the kernel.
 func (l *Loop) RunOnce() error {
 	if err := l.submitAndWait(1); err != nil {
 		return err
@@ -68,7 +70,7 @@ func (l *Loop) RunOnce() error {
 	return nil
 }
 
-// Run until all prepared operations are finished.
+// RunUntilDone runs loop until all prepared operations are finished.
 func (l *Loop) RunUntilDone() error {
 	for {
 		if l.callbacks.count() == 0 {
@@ -83,12 +85,16 @@ func (l *Loop) RunUntilDone() error {
 	}
 }
 
-func (l *Loop) Run(ctx context.Context, onCtxDone func()) error {
+// Run runs loop until ctx is cancelled. Then performs clean shutdown.
+// After ctx is done it closes all pending listeners and dialed connections.
+// Listener will first stop listening then close all accepted connections.
+// Loop will wait for all operations to finish.
+func (l *Loop) Run(ctx context.Context) error {
+	// run until ctx is done
 	if err := l.RunCtx(ctx, time.Millisecond*333); err != nil {
 		return err
 	}
-	// call handler to
-	onCtxDone()
+	l.closePendingConnections()
 	// run loop until all operations finishes
 	if err := l.RunUntilDone(); err != nil {
 		return err
@@ -96,8 +102,17 @@ func (l *Loop) Run(ctx context.Context, onCtxDone func()) error {
 	return nil
 }
 
-// RunCtx until context is canceled.
-// Check context every timeout.
+func (l *Loop) closePendingConnections() {
+	for _, lsn := range l.listeners {
+		lsn.Close()
+	}
+	for _, conn := range l.connections {
+		conn.Close()
+	}
+}
+
+// RunCtx runs loop until context is canceled.
+// Checks context every `timeout`.
 func (l *Loop) RunCtx(ctx context.Context, timeout time.Duration) error {
 	ts := syscall.NsecToTimespec(int64(timeout))
 	done := func() bool {
@@ -112,7 +127,7 @@ func (l *Loop) RunCtx(ctx context.Context, timeout time.Duration) error {
 		if err := l.submit(); err != nil {
 			return err
 		}
-		if _, err := l.ring.WaitCQEs(1, &ts, nil); err != nil && !TemporaryErr(err) {
+		if _, err := l.ring.WaitCQEs(1, &ts, nil); err != nil && !TemporaryError(err) {
 			return err
 		}
 		_ = l.flushCompletions()
@@ -123,19 +138,15 @@ func (l *Loop) RunCtx(ctx context.Context, timeout time.Duration) error {
 	return nil
 }
 
-// is this error temporary
-func TemporaryErr(err error) bool {
+// TemporaryError returns true if syscall.Errno should be threated as temporary.
+func TemporaryError(err error) bool {
 	if errno, ok := err.(syscall.Errno); ok {
-		return TemporaryErrno(errno)
+		return (&ErrErrno{Errno: errno}).Temporary()
 	}
 	if os.IsTimeout(err) {
 		return true
 	}
 	return false
-}
-
-func TemporaryErrno(errno syscall.Errno) bool {
-	return errno.Temporary() || errno == unix.ETIME || errno == syscall.ENOBUFS
 }
 
 // Retries on temporary errors.
@@ -153,7 +164,7 @@ func (l *Loop) submitAndWait(waitNr uint32) error {
 		}
 
 		_, err := l.ring.SubmitAndWait(waitNr)
-		if err != nil && TemporaryErr(err) {
+		if err != nil && TemporaryError(err) {
 			continue
 		}
 		return err
@@ -187,33 +198,19 @@ func (l *Loop) flushCompletions() uint32 {
 	for {
 		peeked := l.ring.PeekBatchCQE(cqes[:])
 		for _, cqe := range cqes[:peeked] {
-			errno := cqeErrno(cqe)
+			err := cqeErr(cqe)
 			if cqe.UserData == 0 {
-				slog.Debug("ceq without userdata", "res", cqe.Res, "flags", cqe.Flags, "errno", errno)
+				slog.Debug("ceq without userdata", "res", cqe.Res, "flags", cqe.Flags, "err", err)
 				continue
 			}
 			cb := l.callbacks.get(cqe)
-			cb(cqe.Res, cqe.Flags, errno)
-
+			cb(cqe.Res, cqe.Flags, err)
 		}
 		l.ring.CQAdvance(peeked)
 		noCompleted += peeked
 		if peeked < uint32(len(cqes)) {
 			return noCompleted
 		}
-	}
-}
-
-func (l *Loop) getSQE() (*giouring.SubmissionQueueEntry, error) {
-	for {
-		sqe := l.ring.GetSQE()
-		if sqe == nil {
-			if err := l.submit(); err != nil {
-				return nil, err
-			}
-			continue
-		}
-		return sqe, nil
 	}
 }
 
@@ -313,6 +310,42 @@ func cqeErrno(c *giouring.CompletionQueueEvent) syscall.Errno {
 		return syscall.Errno(-c.Res)
 	}
 	return 0
+}
+
+func cqeErr(c *giouring.CompletionQueueEvent) *ErrErrno {
+	if c.Res > -4096 && c.Res < 0 {
+		errno := syscall.Errno(-c.Res)
+		return &ErrErrno{Errno: errno}
+	}
+	return nil
+}
+
+type ErrErrno struct {
+	Errno syscall.Errno
+}
+
+func (e *ErrErrno) Error() string {
+	return e.Errno.Error()
+}
+
+func (e *ErrErrno) Temporary() bool {
+	o := e.Errno
+	return o == syscall.EINTR || o == syscall.EMFILE || o == syscall.ENFILE ||
+		o == syscall.ENOBUFS || e.Timeout()
+}
+
+func (e *ErrErrno) Timeout() bool {
+	o := e.Errno
+	return o == syscall.EAGAIN || o == syscall.EWOULDBLOCK || o == syscall.ETIMEDOUT ||
+		o == syscall.ETIME
+}
+
+func (e *ErrErrno) Canceled() bool {
+	return e.Errno == syscall.ECANCELED
+}
+
+func (e *ErrErrno) ConnectionReset() bool {
+	return e.Errno == syscall.ECONNRESET || e.Errno == syscall.ENOTCONN
 }
 
 // #region providedBuffers
@@ -422,9 +455,9 @@ func (l *Loop) Dial(addr string, dialed Dialed) error {
 	if err != nil {
 		return err
 	}
-	l.PrepareConnect(fd, sa, func(res int32, flags uint32, errno syscall.Errno) {
-		if errno != 0 {
-			dialed(0, nil, errno)
+	l.PrepareConnect(fd, sa, func(res int32, flags uint32, err *ErrErrno) {
+		if err != nil {
+			dialed(0, nil, err)
 		}
 
 		conn := newTcpConn(l, func() { delete(l.connections, fd) }, fd)

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"syscall"
 )
 
 var (
@@ -48,10 +47,10 @@ func (tc *TCPConn) Bind(up Upstream) {
 func (tc *TCPConn) Send(data []byte) {
 	nn := 0 // number of bytes sent
 	var cb completionCallback
-	cb = func(res int32, flags uint32, errno syscall.Errno) {
+	cb = func(res int32, flags uint32, err *ErrErrno) {
 		nn += int(res) // bytes written so far
-		if errno > 0 {
-			tc.shutdown(errno)
+		if err != nil {
+			tc.shutdown(err)
 			return
 		}
 		if nn >= len(data) {
@@ -68,10 +67,10 @@ func (tc *TCPConn) Send(data []byte) {
 
 func (tc *TCPConn) SendBuffers(buffers [][]byte) {
 	var cb completionCallback
-	cb = func(res int32, flags uint32, errno syscall.Errno) {
+	cb = func(res int32, flags uint32, err *ErrErrno) {
 		n := int(res)
-		if errno > 0 {
-			tc.shutdown(errno)
+		if err != nil {
+			tc.shutdown(err)
 			return
 		}
 		consume(&buffers, n)
@@ -106,27 +105,21 @@ func (tc *TCPConn) Close() {
 	tc.shutdown(ErrUpstreamClose)
 }
 
-// Allows upper layer to change connection handler.
-// Useful in websocket handshake for example.
-func (tc *TCPConn) SetUpstream(conn Upstream) {
-	tc.up = conn
-}
-
 // recvLoop starts multishot recv on fd
 // Will receive on fd until error occurs.
 func (tc *TCPConn) recvLoop() {
 	var cb completionCallback
-	cb = func(res int32, flags uint32, errno syscall.Errno) {
-		if errno > 0 {
-			if TemporaryErrno(errno) {
-				slog.Debug("tcp conn read temporary error", "error", errno.Error(), "errno", uint(errno), "flags", flags)
+	cb = func(res int32, flags uint32, err *ErrErrno) {
+		if err != nil {
+			if err.Temporary() {
+				slog.Debug("tcp conn read temporary error", "error", err.Error())
 				tc.loop.PrepareRecv(tc.fd, cb)
 				return
 			}
-			if errno != syscall.ECONNRESET {
-				slog.Warn("tcp conn read error", "error", errno.Error(), "errno", uint(errno), "flags", flags)
+			if !err.ConnectionReset() {
+				slog.Warn("tcp conn read error", "error", err.Error())
 			}
-			tc.shutdown(errno)
+			tc.shutdown(err)
 			return
 		}
 		if res == 0 {
@@ -137,7 +130,7 @@ func (tc *TCPConn) recvLoop() {
 		tc.up.Received(buf)
 		tc.loop.buffers.release(buf, id)
 		if !isMultiShot(flags) {
-			slog.Debug("tcp conn multishot terminated", slog.Uint64("flags", uint64(flags)), slog.Uint64("errno", uint64(errno)))
+			slog.Debug("tcp conn multishot terminated", slog.Uint64("flags", uint64(flags)), slog.String("error", err.Error()))
 			// io_uring can terminate multishot recv when cqe is full
 			// need to restart it then
 			// ref: https://lore.kernel.org/lkml/20220630091231.1456789-3-dylany@fb.com/T/#re5daa4d5b6e4390ecf024315d9693e5d18d61f10
@@ -156,20 +149,20 @@ func (tc *TCPConn) shutdown(err error) {
 		return
 	}
 	tc.shutdownError = err
-	tc.loop.PrepareShutdown(tc.fd, func(res int32, flags uint32, errno syscall.Errno) {
-		if !(errno == 0 || errno == syscall.ENOTCONN) {
-			slog.Debug("tcp conn shutdown", "fd", tc.fd, "errno", errno, "res", res, "flags", flags)
-		}
-		if errno != 0 {
+	tc.loop.PrepareShutdown(tc.fd, func(res int32, flags uint32, err *ErrErrno) {
+		if err != nil {
+			if !err.ConnectionReset() {
+				slog.Debug("tcp conn shutdown", "fd", tc.fd, "err", err, "res", res, "flags", flags)
+			}
 			if tc.closedCallback != nil {
 				tc.closedCallback()
 			}
 			tc.up.Closed(tc.shutdownError)
 			return
 		}
-		tc.loop.PrepareClose(tc.fd, func(res int32, flags uint32, errno syscall.Errno) {
-			if errno != 0 {
-				slog.Debug("tcp conn close", "fd", tc.fd, "errno", errno, "res", res, "flags", flags)
+		tc.loop.PrepareClose(tc.fd, func(res int32, flags uint32, err *ErrErrno) {
+			if err != nil {
+				slog.Debug("tcp conn close", "fd", tc.fd, "errno", err, "res", res, "flags", flags)
 			}
 			if tc.closedCallback != nil {
 				tc.closedCallback()

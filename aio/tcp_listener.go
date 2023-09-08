@@ -21,8 +21,9 @@ type TCPListener struct {
 }
 
 func (l *TCPListener) accept() {
-	l.loop.PrepareMultishotAccept(l.fd, func(res int32, flags uint32, errno syscall.Errno) {
-		if errno == 0 {
+	var cb completionCallback
+	cb = func(res int32, flags uint32, err *ErrErrno) {
+		if err == nil {
 			fd := int(res)
 			// create new tcp connection and bind it with upstream layer
 			tc := newTcpConn(l.loop, func() { delete(l.connections, fd) }, fd)
@@ -30,10 +31,15 @@ func (l *TCPListener) accept() {
 			l.connections[fd] = tc
 			return
 		}
-		if errno != syscall.ECANCELED {
-			slog.Debug("listener accept", "fd", l.fd, "errno", errno, "res", res, "flags", flags)
+		if err.Temporary() {
+			l.loop.PrepareMultishotAccept(l.fd, cb)
+			return
 		}
-	})
+		if !err.Canceled() {
+			slog.Debug("listener accept", "fd", l.fd, "errno", err, "res", res, "flags", flags)
+		}
+	}
+	l.loop.PrepareMultishotAccept(l.fd, cb)
 }
 
 func (l *TCPListener) Close() {
@@ -41,9 +47,9 @@ func (l *TCPListener) Close() {
 }
 
 func (l *TCPListener) close(shutdownConnections bool) {
-	l.loop.PrepareCancelFd(l.fd, func(res int32, flags uint32, errno syscall.Errno) {
-		if errno != 0 {
-			slog.Debug("listener cancel", "fd", l.fd, "errno", errno, "res", res, "flags", flags)
+	l.loop.PrepareCancelFd(l.fd, func(res int32, flags uint32, err *ErrErrno) {
+		if err != nil {
+			slog.Debug("listener cancel", "fd", l.fd, "err", err, "res", res, "flags", flags)
 		}
 		if shutdownConnections {
 			for _, conn := range l.connections {

@@ -43,12 +43,12 @@ func run(ipPort string) error {
 	}
 
 	// start tcp listener
-	lsn, err := loop.Listen(ipPort, tcpAccepted)
+	_, err = loop.Listen(ipPort, tcpAccepted)
 	if err != nil {
 		return err
 	}
 	// run loop, this is blocking
-	if err := loop.Run(signal.InterruptContext(), func() { lsn.Close() }); err != nil {
+	if err := loop.Run(signal.InterruptContext()); err != nil {
 		slog.Error("run", "error", err)
 	}
 
