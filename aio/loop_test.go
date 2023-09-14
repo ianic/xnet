@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"runtime"
 	"syscall"
 	"testing"
 	"time"
@@ -102,6 +103,7 @@ func TestTCPConnectSend(t *testing.T) {
 			tc.Send(data)
 		})
 		loop.runUntilDone()
+		runtime.GC() // checks that pinned pointers are unpinned
 		close(loopDone)
 	}()
 

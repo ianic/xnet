@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net"
 	"syscall"
+	"unsafe"
 
 	_ "unsafe"
 
@@ -67,16 +68,8 @@ func socket(sa syscall.Sockaddr) (int, error) {
 	return syscall.Socket(domain, syscall.SOCK_STREAM, 0)
 }
 
-func listen(sa syscall.Sockaddr) (int, int, error) {
+func listen(sa syscall.Sockaddr, domain int) (int, int, error) {
 	port := 0
-	domain := syscall.AF_INET
-	switch v := sa.(type) {
-	case *syscall.SockaddrInet4:
-		port = v.Port
-	case *syscall.SockaddrInet6:
-		port = v.Port
-		domain = syscall.AF_INET6
-	}
 	fd, err := syscall.Socket(domain, syscall.SOCK_STREAM, 0)
 	if err != nil {
 		return 0, 0, err
@@ -115,15 +108,18 @@ func listen(sa syscall.Sockaddr) (int, int, error) {
 // "www.google.com:80"
 // "[::1]:0"
 // "127.0.0.1:1234"
-func resolveTCPAddr(addr string) (syscall.Sockaddr, error) {
+func resolveTCPAddr(addr string) (syscall.Sockaddr, int, error) {
 	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	ip := tcpAddr.IP
 	port := tcpAddr.Port
 	if ip4 := ip.To4(); ip4 != nil {
-		return &syscall.SockaddrInet4{Port: port, Addr: [4]byte(ip4)}, nil
+		return &syscall.SockaddrInet4{Port: port, Addr: [4]byte(ip4)}, syscall.AF_INET, nil
 	}
-	return &syscall.SockaddrInet6{Port: port, Addr: [16]byte(ip)}, nil
+	return &syscall.SockaddrInet6{Port: port, Addr: [16]byte(ip)}, syscall.AF_INET6, nil
 }
+
+//go:linkname sockaddr syscall.Sockaddr.sockaddr
+func sockaddr(addr syscall.Sockaddr) (unsafe.Pointer, uint32, error)

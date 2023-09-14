@@ -15,9 +15,12 @@ func TestResolveTCPAddr4(t *testing.T) {
 		{"4.4.4.4:0", [4]byte{4, 4, 4, 4}, 0},
 	}
 	for _, c := range cases {
-		so, err := resolveTCPAddr(c.addr)
+		so, domain, err := resolveTCPAddr(c.addr)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if domain != syscall.AF_INET {
+			t.Fatalf("unexpected domain")
 		}
 		so4, ok := so.(*syscall.SockaddrInet4)
 		if !ok {
@@ -38,9 +41,12 @@ func TestResolveTCPAddr6(t *testing.T) {
 		{"[2001:0000:130F:0000:0000:09C0:876A:130B]:1234", [16]byte{32, 1, 0, 0, 19, 15, 0, 0, 0, 0, 9, 192, 135, 106, 19, 11}, 1234},
 	}
 	for _, c := range cases {
-		so, err := resolveTCPAddr(c.addr)
+		so, domain, err := resolveTCPAddr(c.addr)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if domain != syscall.AF_INET6 {
+			t.Fatalf("unexpected domain")
 		}
 		so6, ok := so.(*syscall.SockaddrInet6)
 		if !ok {

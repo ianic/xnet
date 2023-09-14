@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"math"
 	"os"
+	"runtime"
 	"syscall"
 	"time"
 	"unsafe"
@@ -296,11 +297,16 @@ func (l *Loop) prepareRecv(fd int, cb completionCallback) {
 	})
 }
 
-func (l *Loop) prepareConnect(fd int, so syscall.Sockaddr, cb completionCallback) {
+func (l *Loop) prepareConnect(fd int, addr uintptr, addrLen uint64, cb completionCallback) {
 	l.prepare(func(sqe *giouring.SubmissionQueueEntry) {
-		if err := sqe.PrepareConnect(fd, so); err != nil {
-			panic(err) // only if tcp port is out of range
-		}
+		sqe.PrepareConnect(fd, addr, addrLen)
+		l.callbacks.set(sqe, cb)
+	})
+}
+
+func (l *Loop) prepareStreamSocket(domain int, cb completionCallback) {
+	l.prepare(func(sqe *giouring.SubmissionQueueEntry) {
+		sqe.PrepareSocket(domain, syscall.SOCK_STREAM, 0, 0)
 		l.callbacks.set(sqe, cb)
 	})
 }
@@ -436,26 +442,37 @@ func isMultiShot(flags uint32) bool {
 	return flags&giouring.CQEFMore > 0
 }
 
-// Dial callback
+// callback fired when tcp connection is dialed
 type Dialed func(fd int, tcpConn *TCPConn, err error)
 
 func (l *Loop) Dial(addr string, dialed Dialed) error {
-	sa, err := resolveTCPAddr(addr)
+	sa, domain, err := resolveTCPAddr(addr)
 	if err != nil {
 		return err
 	}
-	fd, err := socket(sa)
+	rawAddr, rawAddrLen, err := sockaddr(sa)
 	if err != nil {
 		return err
 	}
-	l.prepareConnect(fd, sa, func(res int32, flags uint32, err *ErrErrno) {
+	var pinner runtime.Pinner
+	pinner.Pin(rawAddr)
+	l.prepareStreamSocket(domain, func(res int32, flags uint32, err *ErrErrno) {
 		if err != nil {
 			dialed(0, nil, err)
+			pinner.Unpin()
+			return
 		}
-
-		conn := newTcpConn(l, func() { delete(l.connections, fd) }, fd)
-		l.connections[fd] = conn
-		dialed(fd, conn, nil)
+		fd := int(res)
+		l.prepareConnect(fd, uintptr(rawAddr), uint64(rawAddrLen), func(res int32, flags uint32, err *ErrErrno) {
+			defer pinner.Unpin()
+			if err != nil {
+				dialed(0, nil, err)
+				return
+			}
+			conn := newTcpConn(l, func() { delete(l.connections, fd) }, fd)
+			l.connections[fd] = conn
+			dialed(fd, conn, nil)
+		})
 	})
 	return nil
 }
@@ -466,11 +483,11 @@ type Accepted func(fd int, tcpConn *TCPConn)
 // ip4:  "127.0.0.1:8080",
 // ip6: "[::1]:80"
 func (l *Loop) Listen(addr string, accepted Accepted) (*TCPListener, error) {
-	sa, err := resolveTCPAddr(addr)
+	sa, domain, err := resolveTCPAddr(addr)
 	if err != nil {
 		return nil, err
 	}
-	fd, port, err := listen(sa)
+	fd, port, err := listen(sa, domain)
 	if err != nil {
 		return nil, err
 	}

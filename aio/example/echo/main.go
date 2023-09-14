@@ -13,7 +13,7 @@ func main() {
 	}
 }
 
-func run(ipPort string) error {
+func run(addr string) error {
 	// start loop
 	loop, err := aio.New(aio.Options{
 		RingEntries:      128,
@@ -31,11 +31,11 @@ func run(ipPort string) error {
 	}
 
 	// start listener
-	lsn, err := loop.Listen(ipPort, tcpAccepted)
+	_, err = loop.Listen(addr, tcpAccepted)
 	if err != nil {
 		return err
 	}
-	slog.Debug("started server", "addr", ipPort, "port", lsn.Port())
+	slog.Debug("started server", "addr", addr)
 	// run util interrupted
 	ctx := signal.InterruptContext()
 	if err := loop.Run(ctx); err != nil {
