@@ -262,6 +262,7 @@ func (l *Loop) prepareClose(fd int, cb completionCallback) {
 	})
 }
 
+// assumes that buf is already pinned in the caller
 func (l *Loop) prepareSend(fd int, buf []byte, cb completionCallback) {
 	l.prepare(func(sqe *giouring.SubmissionQueueEntry) {
 		sqe.PrepareSend(fd, uintptr(unsafe.Pointer(&buf[0])), uint32(len(buf)), 0)
@@ -272,16 +273,9 @@ func (l *Loop) prepareSend(fd int, buf []byte, cb completionCallback) {
 // references from std lib:
 // https://github.com/golang/go/blob/140266fe7521bf75bf0037f12265190213cc8e7d/src/internal/poll/writev.go#L16
 // https://github.com/golang/go/blob/140266fe7521bf75bf0037f12265190213cc8e7d/src/internal/poll/fd_writev_unix.go#L20
-func (l *Loop) prepareWritev(fd int, buffers [][]byte, cb completionCallback) {
+// assumes that iovecs are pinner in caller
+func (l *Loop) prepareWritev(fd int, iovecs []syscall.Iovec, cb completionCallback) {
 	l.prepare(func(sqe *giouring.SubmissionQueueEntry) {
-		var iovecs []syscall.Iovec
-		for _, buf := range buffers {
-			if len(buf) == 0 {
-				continue
-			}
-			iovecs = append(iovecs, syscall.Iovec{Base: &buf[0]})
-			iovecs[len(iovecs)-1].SetLen(len(buf))
-		}
 		sqe.PrepareWritev(fd, uintptr(unsafe.Pointer(&iovecs[0])), uint32(len(iovecs)), 0)
 		l.callbacks.set(sqe, cb)
 	})

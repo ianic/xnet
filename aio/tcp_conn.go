@@ -4,6 +4,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"runtime"
+	"syscall"
 )
 
 var (
@@ -47,48 +49,71 @@ func (tc *TCPConn) Bind(up Upstream) {
 func (tc *TCPConn) Send(data []byte) {
 	nn := 0 // number of bytes sent
 	var cb completionCallback
+	var pinner runtime.Pinner
+	pinner.Pin(&data[0])
 	cb = func(res int32, flags uint32, err *ErrErrno) {
 		nn += int(res) // bytes written so far
 		if err != nil {
+			pinner.Unpin()
 			tc.shutdown(err)
 			return
 		}
 		if nn >= len(data) {
-			// all sent call callback
-			tc.up.Sent()
+			pinner.Unpin()
+			tc.up.Sent() // all sent call callback
 			return
 		}
 		// send rest of the data
 		tc.loop.prepareSend(tc.fd, data[nn:], cb)
-		// new send prepared
 	}
 	tc.loop.prepareSend(tc.fd, data, cb)
 }
 
 func (tc *TCPConn) SendBuffers(buffers [][]byte) {
 	var cb completionCallback
+	var pinner runtime.Pinner
+	for _, buf := range buffers {
+		pinner.Pin(&buf[0])
+	}
 	cb = func(res int32, flags uint32, err *ErrErrno) {
 		n := int(res)
 		if err != nil {
+			pinner.Unpin()
 			tc.shutdown(err)
 			return
 		}
-		consume(&buffers, n)
+		consumeBuffers(&buffers, n)
 		if len(buffers) == 0 {
+			pinner.Unpin()
 			tc.up.Sent()
 			return
 		}
 		// send rest of the data
-		tc.loop.prepareWritev(tc.fd, buffers, cb)
-		// new send prepared
+		iovecs := buffersToIovec(buffers)
+		pinner.Pin(&iovecs[0])
+		tc.loop.prepareWritev(tc.fd, iovecs, cb)
 	}
-	tc.loop.prepareWritev(tc.fd, buffers, cb)
+	iovecs := buffersToIovec(buffers)
+	pinner.Pin(&iovecs[0])
+	tc.loop.prepareWritev(tc.fd, iovecs, cb)
 }
 
-// consume removes data from a slice of byte slices, for writev.
+func buffersToIovec(buffers [][]byte) []syscall.Iovec {
+	var iovecs []syscall.Iovec
+	for _, buf := range buffers {
+		if len(buf) == 0 {
+			continue
+		}
+		iovecs = append(iovecs, syscall.Iovec{Base: &buf[0]})
+		iovecs[len(iovecs)-1].SetLen(len(buf))
+	}
+	return iovecs
+}
+
+// consumeBuffers removes data from a slice of byte slices, for writev.
 // copied from:
 // https://github.com/golang/go/blob/140266fe7521bf75bf0037f12265190213cc8e7d/src/internal/poll/fd.go#L69
-func consume(v *[][]byte, n int) {
+func consumeBuffers(v *[][]byte, n int) {
 	for len(*v) > 0 {
 		ln0 := len((*v)[0])
 		if ln0 > n {

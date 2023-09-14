@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -22,7 +21,8 @@ func main() {
 		go func() {
 			n := rand.Intn(len(buf)) + 1
 			if err := echoTest(buf[:n]); err != nil {
-				fmt.Printf("e")
+				fmt.Println(err)
+				//fmt.Printf("e")
 			} else {
 				fmt.Printf(".")
 			}
@@ -63,7 +63,7 @@ func echoTest(buf []byte) error {
 		return err
 	}
 	if !bytes.Equal(buf, rbuf) {
-		return errors.New("not equal buffers")
+		return fmt.Errorf("not equal buffers %d %d", len(buf), len(rbuf))
 	}
 	return nil
 }
