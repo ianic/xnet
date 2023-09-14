@@ -54,7 +54,7 @@ func New(opt Options) (*Loop, error) {
 		connections: make(map[int]*TCPConn),
 	}
 	l.callbacks.init()
-	if err := l.buffers.setup(ring, opt.RecvBuffersCount, opt.RecvBufferLen); err != nil {
+	if err := l.buffers.init(ring, opt.RecvBuffersCount, opt.RecvBufferLen); err != nil {
 		return nil, err
 	}
 	return l, nil
@@ -217,6 +217,7 @@ func (l *Loop) flushCompletions() uint32 {
 
 func (l *Loop) Close() {
 	l.ring.QueueExit()
+	l.buffers.deinit()
 }
 
 // prepares operation or adds it to pending if can't get sqe
@@ -350,11 +351,18 @@ type providedBuffers struct {
 	bufLen  uint32
 }
 
-func (b *providedBuffers) setup(ring *giouring.Ring, entries uint32, bufLen uint32) error {
+func (b *providedBuffers) init(ring *giouring.Ring, entries uint32, bufLen uint32) error {
 	b.entries = entries
 	b.bufLen = bufLen
-	b.data = make([]byte, b.entries*b.bufLen)
+	// mmap allocated space for all buffers
 	var err error
+	size := int(b.entries * b.bufLen)
+	b.data, err = syscall.Mmap(-1, 0, size,
+		syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_ANON|syscall.MAP_PRIVATE)
+	if err != nil {
+		return err
+	}
+	// share buffers with io_uring
 	b.br, err = ring.SetupBufRing(b.entries, buffersGroupID, 0)
 	if err != nil {
 		return err
@@ -394,6 +402,10 @@ func (b *providedBuffers) release(buf []byte, bufferID uint16) {
 		0,
 	)
 	b.br.BufRingAdvance(1)
+}
+
+func (b *providedBuffers) deinit() {
+	_ = syscall.Munmap(b.data)
 }
 
 //#endregion providedBuffers
