@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"math/rand"
@@ -148,7 +149,6 @@ func (u *Upgrader) Shutdown(ctx context.Context) error {
 			timer.Reset(nextPollInterval())
 		}
 	}
-
 }
 
 func NewFromRequest(w http.ResponseWriter, r *http.Request) (*Conn, error) {
@@ -202,5 +202,41 @@ func New(nc net.Conn) (*Conn, error) {
 		return nil, err
 	}
 	ws := NewConnection(nc, br, hs.extension.permessageDeflate)
+	return &ws, nil
+}
+
+func Client(nc net.Conn, host, path, origin string) (*Conn, error) {
+	secKey, err := secKey()
+	if err != nil {
+		return nil, err
+	}
+	format := "GET %s HTTP/1.1\r\n" +
+		"Host: %s\r\n" +
+		"Origin: %s\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: %s\r\n" +
+		"Sec-WebSocket-Version: 13\r\n\r\n"
+
+	upgradeReq := fmt.Sprintf(format, path, host, origin, secKey)
+	fmt.Printf("%s", upgradeReq)
+	_, err = nc.Write([]byte(upgradeReq))
+	if err != nil {
+		return nil, err
+	}
+
+	br := bufio.NewReader(deadlineReader{nc: nc})
+
+	req, err := http.ReadResponse(br, nil)
+	if err != nil {
+		return nil, err
+	}
+	secAccept := secAccept(secKey)
+	secAcceptActual := req.Header.Get("Sec-WebSocket-Accept")
+	if secAcceptActual != secAccept {
+		return nil, fmt.Errorf("wrong accept key")
+	}
+
+	ws := NewConnection(nc, br, false)
 	return &ws, nil
 }
