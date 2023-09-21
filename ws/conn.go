@@ -114,16 +114,6 @@ func decompress(frame *Frame) ([]byte, error) {
 	return Decompress(frame.payload)
 }
 
-func verifyFrame(frame Frame, prevFragment Fragment, permessageDeflate bool) error {
-	if err := frame.verifyContinuation(prevFragment); err != nil {
-		return err
-	}
-	if err := frame.verifyRsvBits(permessageDeflate); err != nil {
-		return err
-	}
-	return nil
-}
-
 // verify that text message has valid utf8 payload
 func verifyMessage(opcode OpCode, payload []byte) error {
 	if opcode == Text && !utf8.Valid(payload) {

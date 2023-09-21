@@ -100,10 +100,6 @@ type Frame struct {
 	deflated bool
 }
 
-func (f Frame) rsv1() bool {
-	return f.flags&rsv1Mask != 0
-}
-
 func (f Frame) rsv2() bool {
 	return f.flags&rsv2Mask != 0
 }
@@ -127,10 +123,6 @@ func (f *Frame) fragment() Fragment {
 	}
 	// not fin and opcode binary or text
 	return fragFirst
-}
-
-func (f Frame) first() bool {
-	return f.opcode != Continuation
 }
 
 func (f Frame) verifyContinuation(prev Fragment) error {

@@ -171,7 +171,7 @@ func TestDefragmentSingleFrame(t *testing.T) {
 	if !full.fin || full.opcode != Text || len(full.payload) != 5 {
 		t.Fatalf("unexpected frame state")
 	}
-	full, partail, err = full.defragment(hello)
+	_, _, err = full.defragment(hello)
 	if err != ErrInvalidFragmentation {
 		t.Fatalf("can't append to fin frame %s", err)
 	}
@@ -211,7 +211,7 @@ func TestDefragmentFragmentedMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	if full == nil || partial != nil {
-		t.Fatalf("ecpected full")
+		t.Fatalf("expected full")
 	}
 	if !full.fin ||
 		len(full.payload) != 6 ||
