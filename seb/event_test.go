@@ -35,6 +35,9 @@ func TestEventEncode(t *testing.T) {
 	require.Equal(t, e.Body, buf[22:])
 
 	var e2 Event
+	err = e2.Decode(buf[:len(buf)-1])
+	require.ErrorIs(t, err, ErrSplitBuffer)
+
 	err = e2.Decode(buf)
 	require.NoError(t, err)
 	require.Equal(t, e, e2)

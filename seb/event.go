@@ -3,8 +3,23 @@ package seb
 import (
 	"encoding/binary"
 	"errors"
-	"fmt"
-	"io"
+)
+
+var (
+	ErrInsufficientBuffer = errors.New("insufficient buffer")
+	ErrWrongOperation     = errors.New("wrong operation")
+	ErrSplitBuffer        = errors.New("split buffer")
+)
+
+type Operation byte
+
+const (
+	OpNone Operation = iota
+	OpEvent
+	// stream switch
+	// pub
+	// sub
+	// connect
 )
 
 type EventType byte
@@ -25,26 +40,6 @@ type Event struct {
 	// key
 }
 
-type Operation byte
-
-const (
-	OpNone Operation = iota
-	OpEvent
-	// stream switch
-	// pub
-	// sub
-	// connect
-)
-
-type Reader interface {
-	ReadByte() (byte, error)
-	Read(size int) ([]byte, error)
-}
-
-type Writer interface {
-	Buffer(size int) ([]byte, error)
-}
-
 func (e *Event) FrameLen() int {
 	// opcode, sequence, timestamp, type, body len, body bytes
 	return 1 + 8 + 8 + 1 + 4 + len(e.Body)
@@ -60,132 +55,6 @@ func (e *Event) Encode(buf []byte) error {
 	return w.Err()
 }
 
-type writer struct {
-	buf    []byte
-	offset int
-	err    error
-}
-
-func (w *writer) Err() error {
-	return w.err
-}
-
-func (w *writer) remainingSpace() int {
-	return len(w.buf) - w.offset
-}
-
-func (w *writer) PutByte(v byte) {
-	if w.err != nil {
-		return
-	}
-	if w.remainingSpace() < 1 {
-		w.err = ErrInsufficientBuffer
-		return
-	}
-	w.buf[w.offset] = v
-	w.offset += 1
-}
-
-func (w *writer) PutUint64(v uint64) {
-	if w.err != nil {
-		return
-	}
-	if w.remainingSpace() < 8 {
-		w.err = ErrInsufficientBuffer
-		return
-	}
-	binary.LittleEndian.PutUint64(w.buf[w.offset:w.offset+8], v)
-	w.offset += 8
-}
-
-func (w *writer) PutSlice(v []byte) {
-	if w.err != nil {
-		return
-	}
-	l := len(v)
-	// TODO maybe check max l and return error
-	if w.remainingSpace() < l+4 {
-		w.err = ErrInsufficientBuffer
-		return
-	}
-
-	binary.LittleEndian.PutUint32(w.buf[w.offset:w.offset+4], uint32(l))
-	w.offset += 4
-	if copy(w.buf[w.offset:], v) != l {
-		w.err = ErrInsufficientBuffer
-		return
-	}
-	w.offset += l
-}
-
-type reader struct {
-	buf    []byte
-	offset int
-	err    error
-}
-
-func (r *reader) remainingSpace() int {
-	return len(r.buf) - r.offset
-}
-
-func (r *reader) Byte() byte {
-	if r.err != nil {
-		return 0
-	}
-	if r.remainingSpace() < 1 {
-		return 0
-	}
-	v := r.buf[r.offset]
-	r.offset += 1
-	return v
-}
-
-func (r *reader) Uint64() uint64 {
-	if r.err != nil {
-		return 0
-	}
-	const l = 8
-	if r.remainingSpace() < l {
-		return 0
-	}
-	v := binary.LittleEndian.Uint64(r.buf[r.offset : r.offset+l])
-	r.offset += l
-	return v
-}
-
-func (r *reader) Uint32() uint32 {
-	if r.err != nil {
-		return 0
-	}
-	const l = 4
-	if r.remainingSpace() < l {
-		return 0
-	}
-	v := binary.LittleEndian.Uint32(r.buf[r.offset : r.offset+l])
-	r.offset += l
-	return v
-}
-
-func (r *reader) Slice() []byte {
-	if r.err != nil {
-		return nil
-	}
-	l := int(r.Uint32())
-	if l == 0 {
-		return nil
-	}
-	if r.remainingSpace() < l {
-		return nil
-	}
-	v := r.buf[r.offset : r.offset+l]
-	r.offset += l
-	return v
-}
-
-func (r *reader) Err() error {
-	return r.err
-}
-
 func (e *Event) Decode(buf []byte) error {
 	r := reader{buf: buf}
 	op := Operation(r.Byte())
@@ -199,95 +68,131 @@ func (e *Event) Decode(buf []byte) error {
 	return r.Err()
 }
 
-// func (e *Event) Decode(rd Reader) error {
-// 	// check opcode
-// 	opcode, err := rd.ReadByte()
-// 	if err != nil {
-// 		return err
-// 	}
-// 	if opcode != byte(OpEvent) {
-// 		return ErrWrongOperation
-// 	}
-// 	// sequence
-// 	buf, err := rd.Read(8)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	e.Sequence = binary.LittleEndian.Uint64(buf)
-// 	// timestamp
-// 	buf, err = rd.Read(8)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	e.Timestamp = binary.LittleEndian.Uint64(buf)
-// 	// type
-// 	typ, err := rd.ReadByte()
-// 	if err != nil {
-// 		return err
-// 	}
-// 	e.Type = EventType(typ)
-
-// 	// body
-// 	buf, err = rd.Read(4)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	bodyLen := binary.LittleEndian.Uint32(buf)
-// 	body, err := rd.Read(int(bodyLen))
-// 	if err != nil {
-// 		return err
-// 	}
-// 	e.Body = body
-// 	return nil
-// }
-
-var (
-	ErrInsufficientBuffer = errors.New("insufficient buffer")
-	ErrWrongOperation     = errors.New("wrong operation")
-)
-
-type BufferReader struct {
-	buf  []byte
-	head int
-	tail int
+type writer struct {
+	buf    []byte
+	offset int
+	err    error
 }
 
-func (r *BufferReader) ReadByte() (byte, error) {
-	if r.head < len(r.buf) {
-		b := r.buf[r.head]
-		r.head++
-		return b, nil
+func (w *writer) Err() error {
+	return w.err
+}
+
+func (w *writer) available() int {
+	return len(w.buf) - w.offset
+}
+
+func (w *writer) enoughSpace(l int) bool {
+	if w.err != nil {
+		return false
 	}
-	if r.head == r.tail {
-		return 0, io.EOF
+	if w.available() < l {
+		w.err = ErrInsufficientBuffer
+		return false
 	}
-	return 0, &ErrReadMore{Bytes: 1}
+	return true
 }
 
-func (r *BufferReader) Read(size int) ([]byte, error) {
-	if r.head+size <= len(r.buf) {
-		b := r.buf[r.head : r.head+size]
-		r.head += size
-		return b, nil
+func (w *writer) PutByte(v byte) {
+	if !w.enoughSpace(1) {
+		return
 	}
-	if r.head == r.tail {
-		return nil, io.EOF
+	w.buf[w.offset] = v
+	w.offset += 1
+}
+
+func (w *writer) PutUint64(v uint64) {
+	const l = 8
+	if !w.enoughSpace(l) {
+		return
 	}
-	return nil, &ErrReadMore{Bytes: r.head + size - len(r.buf)}
+	binary.LittleEndian.PutUint64(w.buf[w.offset:w.offset+l], v)
+	w.offset += l
 }
 
-func (r *BufferReader) pending() []byte {
-	return r.buf[r.tail:]
+func (w *writer) PutUint32(v uint32) {
+	const l = 4
+	if !w.enoughSpace(l) {
+		return
+	}
+	binary.LittleEndian.PutUint32(w.buf[w.offset:w.offset+l], v)
+	w.offset += l
 }
 
-func NewBufferReader(buf []byte) *BufferReader {
-	return &BufferReader{buf: buf}
+func (w *writer) PutSlice(v []byte) {
+	l := len(v)
+	w.PutUint32(uint32(l))
+	if !w.enoughSpace(l) {
+		return
+	}
+	if copy(w.buf[w.offset:w.offset+l], v) != l {
+		w.err = ErrInsufficientBuffer
+		return
+	}
+	w.offset += l
 }
 
-type ErrReadMore struct {
-	Bytes int
+type reader struct {
+	buf    []byte
+	offset int
+	err    error
 }
 
-func (e *ErrReadMore) Error() string {
-	return fmt.Sprintf("read %d bytes more", e.Bytes)
+func (r *reader) available() int {
+	return len(r.buf) - r.offset
+}
+
+func (r *reader) enoughSpace(l int) bool {
+	if r.err != nil {
+		return false
+	}
+	if l > r.available() {
+		r.err = ErrSplitBuffer
+		return false
+	}
+	return true
+}
+
+func (r *reader) Byte() byte {
+	if !r.enoughSpace(1) {
+		return 0
+	}
+	v := r.buf[r.offset]
+	r.offset += 1
+	return v
+}
+
+func (r *reader) Uint64() uint64 {
+	const l = 8
+	if !r.enoughSpace(l) {
+		return 0
+	}
+	v := binary.LittleEndian.Uint64(r.buf[r.offset : r.offset+l])
+	r.offset += l
+	return v
+}
+
+func (r *reader) Uint32() uint32 {
+	const l = 4
+	if !r.enoughSpace(l) {
+		return 0
+	}
+	v := binary.LittleEndian.Uint32(r.buf[r.offset : r.offset+l])
+	r.offset += l
+	return v
+}
+
+// TODO Slice32 Slice16 methods for different slice len
+func (r *reader) Slice() []byte {
+	l := int(r.Uint32())
+	if l == 0 || !r.enoughSpace(l) {
+		return nil
+	}
+	v := r.buf[r.offset : r.offset+l]
+	r.offset += l
+	return v
+}
+
+func (r *reader) Err() error {
+	return r.err
 }
