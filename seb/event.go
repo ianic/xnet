@@ -47,12 +47,16 @@ func (e *Event) FrameLen() int {
 
 func (e *Event) Encode(buf []byte) error {
 	w := writer{buf: buf}
+	return e.encode(&w)
+}
+
+func (e *Event) encode(w *writer) error {
 	w.PutByte(byte(OpEvent))
 	w.PutUint64(e.Sequence)
 	w.PutUint64(e.Timestamp)
 	w.PutByte(byte(e.Type))
 	w.PutSlice(e.Body)
-	return w.Err()
+	return w.Done()
 }
 
 func (e *Event) Decode(buf []byte) error {
@@ -69,17 +73,26 @@ func (e *Event) Decode(buf []byte) error {
 }
 
 type writer struct {
-	buf    []byte
-	offset int
-	err    error
+	buf  []byte
+	head int
+	tail int
+	err  error
 }
 
-func (w *writer) Err() error {
+func (w *writer) Done() error {
+	if w.err == nil {
+		w.head = w.tail
+	}
 	return w.err
 }
 
+func (w *writer) reset() {
+	w.tail = w.head
+	w.err = nil
+}
+
 func (w *writer) available() int {
-	return len(w.buf) - w.offset
+	return len(w.buf) - w.tail
 }
 
 func (w *writer) enoughSpace(l int) bool {
@@ -97,8 +110,8 @@ func (w *writer) PutByte(v byte) {
 	if !w.enoughSpace(1) {
 		return
 	}
-	w.buf[w.offset] = v
-	w.offset += 1
+	w.buf[w.tail] = v
+	w.tail += 1
 }
 
 func (w *writer) PutUint64(v uint64) {
@@ -106,8 +119,8 @@ func (w *writer) PutUint64(v uint64) {
 	if !w.enoughSpace(l) {
 		return
 	}
-	binary.LittleEndian.PutUint64(w.buf[w.offset:w.offset+l], v)
-	w.offset += l
+	binary.LittleEndian.PutUint64(w.buf[w.tail:w.tail+l], v)
+	w.tail += l
 }
 
 func (w *writer) PutUint32(v uint32) {
@@ -115,8 +128,8 @@ func (w *writer) PutUint32(v uint32) {
 	if !w.enoughSpace(l) {
 		return
 	}
-	binary.LittleEndian.PutUint32(w.buf[w.offset:w.offset+l], v)
-	w.offset += l
+	binary.LittleEndian.PutUint32(w.buf[w.tail:w.tail+l], v)
+	w.tail += l
 }
 
 func (w *writer) PutSlice(v []byte) {
@@ -125,11 +138,11 @@ func (w *writer) PutSlice(v []byte) {
 	if !w.enoughSpace(l) {
 		return
 	}
-	if copy(w.buf[w.offset:w.offset+l], v) != l {
+	if copy(w.buf[w.tail:w.tail+l], v) != l {
 		w.err = ErrInsufficientBuffer
 		return
 	}
-	w.offset += l
+	w.tail += l
 }
 
 type reader struct {
