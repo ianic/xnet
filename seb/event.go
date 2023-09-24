@@ -61,6 +61,10 @@ func (e *Event) encode(w *writer) error {
 
 func (e *Event) Decode(buf []byte) error {
 	r := reader{buf: buf}
+	return e.decode(&r)
+}
+
+func (e *Event) decode(r *reader) error {
 	op := Operation(r.Byte())
 	if op != OpEvent {
 		return ErrWrongOperation
@@ -69,7 +73,7 @@ func (e *Event) Decode(buf []byte) error {
 	e.Timestamp = r.Uint64()
 	e.Type = EventType(r.Byte())
 	e.Body = r.Slice()
-	return r.Err()
+	return r.Done()
 }
 
 type writer struct {
@@ -84,6 +88,12 @@ func (w *writer) Done() error {
 		w.head = w.tail
 	}
 	return w.err
+}
+
+// Written part of the writer buffer.
+// Part of the w.buf where write finished.
+func (w *writer) Written() []byte {
+	return w.buf[0:w.head]
 }
 
 func (w *writer) reset() {
@@ -146,13 +156,30 @@ func (w *writer) PutSlice(v []byte) {
 }
 
 type reader struct {
-	buf    []byte
-	offset int
-	err    error
+	buf  []byte
+	head int
+	tail int
+	err  error
+}
+
+func (r *reader) Done() error {
+	if r.err == nil {
+		r.head = r.tail
+	}
+	return r.err
+}
+
+func (r *reader) Unread() []byte {
+	return r.buf[r.head:]
+}
+
+func (r *reader) reset() {
+	r.tail = r.head
+	r.err = nil
 }
 
 func (r *reader) available() int {
-	return len(r.buf) - r.offset
+	return len(r.buf) - r.tail
 }
 
 func (r *reader) enoughSpace(l int) bool {
@@ -170,8 +197,8 @@ func (r *reader) Byte() byte {
 	if !r.enoughSpace(1) {
 		return 0
 	}
-	v := r.buf[r.offset]
-	r.offset += 1
+	v := r.buf[r.tail]
+	r.tail += 1
 	return v
 }
 
@@ -180,8 +207,8 @@ func (r *reader) Uint64() uint64 {
 	if !r.enoughSpace(l) {
 		return 0
 	}
-	v := binary.LittleEndian.Uint64(r.buf[r.offset : r.offset+l])
-	r.offset += l
+	v := binary.LittleEndian.Uint64(r.buf[r.tail : r.tail+l])
+	r.tail += l
 	return v
 }
 
@@ -190,8 +217,8 @@ func (r *reader) Uint32() uint32 {
 	if !r.enoughSpace(l) {
 		return 0
 	}
-	v := binary.LittleEndian.Uint32(r.buf[r.offset : r.offset+l])
-	r.offset += l
+	v := binary.LittleEndian.Uint32(r.buf[r.tail : r.tail+l])
+	r.tail += l
 	return v
 }
 
@@ -201,11 +228,7 @@ func (r *reader) Slice() []byte {
 	if l == 0 || !r.enoughSpace(l) {
 		return nil
 	}
-	v := r.buf[r.offset : r.offset+l]
-	r.offset += l
+	v := r.buf[r.tail : r.tail+l]
+	r.tail += l
 	return v
-}
-
-func (r *reader) Err() error {
-	return r.err
 }

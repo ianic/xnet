@@ -60,6 +60,7 @@ func TestWriterHeadTail(t *testing.T) {
 	require.Equal(t, 22, w.tail)
 	w.reset()
 	require.Equal(t, 0, w.tail)
+	require.Len(t, w.Written(), 0)
 
 	// make smaller body so it fits into buffer few times
 	e1.Body = make([]byte, 16)
@@ -67,17 +68,57 @@ func TestWriterHeadTail(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 38, w.head)
 	require.Equal(t, 38, w.tail)
+	require.Len(t, w.Written(), 38)
 
 	err = e1.encode(w)
 	require.NoError(t, err)
 	require.Equal(t, 76, w.head)
 	require.Equal(t, 76, w.tail)
+	require.Len(t, w.Written(), 76)
 
 	// tail is moved head is where last successful write finished
 	err = e1.encode(w)
 	require.ErrorIs(t, err, ErrInsufficientBuffer)
 	require.Equal(t, 76, w.head)
 	require.Equal(t, 98, w.tail)
+	require.Len(t, w.Written(), 76)
+
+	w.reset()
+	require.Equal(t, 76, w.tail)
+}
+
+func TestReaderHeadTail(t *testing.T) {
+	buf := make([]byte, 512)
+	w := &writer{buf: buf}
+	e1 := Event{
+		Sequence:  1,
+		Timestamp: 2,
+		Type:      StateEvent,
+		Body:      randomBuf(t, 128),
+	}
+	err := e1.encode(w)
+	require.NoError(t, err)
+	err = e1.encode(w)
+	require.NoError(t, err)
+
+	written := w.Written()
+	require.Len(t, written, 300)
+
+	buf = written[0 : len(written)-1]
+	r := &reader{buf: buf}
+	var e2 Event
+	err = e2.decode(r)
+	require.NoError(t, err)
+	require.Equal(t, e1, e2)
+	require.Equal(t, 150, r.head)
+	require.Equal(t, 150, r.tail)
+
+	err = e2.decode(r)
+	require.ErrorIs(t, err, ErrSplitBuffer)
+	require.Equal(t, 150, r.head)
+	require.Equal(t, 172, r.tail)
+	require.Len(t, r.Unread(), len(buf)-150)
+	require.Equal(t, buf[150:], r.Unread())
 }
 
 func randomBuf(t *testing.T, size int) []byte {
